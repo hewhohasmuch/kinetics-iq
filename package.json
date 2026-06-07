@@ -1,0 +1,24 @@
+{
+  "name": "kineticsiq",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host",
+    "dev:https": "vite --host --https",
+    "build": "npm run build:aruco && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "build:aruco": "node scripts/build-aruco.mjs"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "js-aruco2": "^2.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.1.0",
+    "esbuild": "^0.28.0",
+    "vite": "^5.0.0",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^1.0.0"
+  }
+}
