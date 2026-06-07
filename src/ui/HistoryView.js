@@ -208,7 +208,7 @@ export class HistoryView {
   }
 
   _jointLabel(session) {
-    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow' }
+    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow', ankle: 'Ankle' }
     if (session.side) {
       const side = session.side.charAt(0).toUpperCase() + session.side.slice(1)
       return `${side} ${names[session.joint] || session.joint}`

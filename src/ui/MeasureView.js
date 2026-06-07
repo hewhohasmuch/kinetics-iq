@@ -74,6 +74,7 @@ export class MeasureView {
             <button class="seg-btn" data-joint="hip">Hip</button>
             <button class="seg-btn" data-joint="shoulder">Shoulder</button>
             <button class="seg-btn" data-joint="elbow">Elbow</button>
+            <button class="seg-btn" data-joint="ankle">Ankle</button>
           </div>
           <div class="seg-group" id="seg-side">
             <button class="seg-btn active" data-side="right">Right</button>

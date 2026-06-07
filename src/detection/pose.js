@@ -23,6 +23,10 @@ const JOINT_CONFIG = {
     left:  { proximal: 11, joint: 13, distal: 15 },
     right: { proximal: 12, joint: 14, distal: 16 },
   },
+  ankle: {
+    left:  { proximal: 25, joint: 27, distal: 31 },
+    right: { proximal: 26, joint: 28, distal: 32 },
+  },
 }
 
 export { JOINT_CONFIG }

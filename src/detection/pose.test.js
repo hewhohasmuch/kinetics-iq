@@ -125,7 +125,7 @@ describe('PoseDetector', () => {
 
 describe('JOINT_CONFIG', () => {
   it('has entries for all 4 joints × 2 sides', () => {
-    for (const joint of ['knee', 'hip', 'shoulder', 'elbow']) {
+    for (const joint of ['knee', 'hip', 'shoulder', 'elbow', 'ankle']) {
       for (const side of ['left', 'right']) {
         const cfg = JOINT_CONFIG[joint][side]
         expect(typeof cfg.proximal).toBe('number')
