@@ -37,7 +37,7 @@ export default defineConfig(({ command }) => ({
       },
 
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,bin}'],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/cdnjs\.cloudflare\.com\/.*/i,
@@ -50,10 +50,36 @@ export default defineConfig(({ command }) => ({
               },
             },
           },
+          {
+            urlPattern: /^https:\/\/storage\.googleapis\.com\/mediapipe-models\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'mediapipe-models',
+              expiration: {
+                maxEntries: 5,
+                maxAgeSeconds: 60 * 60 * 24 * 90,
+              },
+            },
+          },
+          {
+            urlPattern: /^https:\/\/cdn\.jsdelivr\.net\/npm\/@mediapipe\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'mediapipe-wasm',
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60 * 24 * 90,
+              },
+            },
+          },
         ],
       },
     }),
   ].filter(Boolean),
+
+  optimizeDeps: {
+    exclude: ['@mediapipe/tasks-vision'],
+  },
 
   server: {
     https: true,

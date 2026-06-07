@@ -25,6 +25,14 @@ export class SessionRecorder {
     this._angles    = []      // all angle samples captured this session
     this._startTime = null    // Date.now() at start
     this._active    = false
+    this._joint     = 'knee'
+    this._side      = 'right'
+  }
+
+  // Set the joint and side before start() so they appear in the saved session.
+  setContext(joint, side) {
+    this._joint = joint
+    this._side  = side
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
@@ -76,7 +84,8 @@ export class SessionRecorder {
       id:            `sess_${this._startTime}`,
       timestamp:     this._startTime,
       date:          new Date(this._startTime).toISOString().split('T')[0],
-      joint:         'knee_right',
+      joint:         this._joint,
+      side:          this._side,
       min:           Math.round(min * 10) / 10,
       max:           Math.round(max * 10) / 10,
       rom:           Math.round((max - min) * 10) / 10,

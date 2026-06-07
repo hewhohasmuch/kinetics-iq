@@ -24,9 +24,9 @@
  */
 
 const MARKER_COLORS = {
-  0: '#60a5fa',
-  1: '#4ade80',
-  2: '#f472b6',
+  proximal: '#60a5fa',
+  joint:    '#4ade80',
+  distal:   '#f472b6',
 }
 const FALLBACK_COLOR = '#ffffff'
 const LINE_COLOR     = 'rgba(255, 255, 255, 0.7)'
@@ -117,49 +117,46 @@ export class Overlay {
     if (!this.ctx) return
     this.clear()
 
-    const ids = Object.keys(markers).map(Number)
-    if (ids.length === 0) {
-      this._drawHint('Point camera at markers')
+    const roles = Object.keys(markers)
+    if (roles.length === 0) {
+      this._drawHint('Point camera at subject')
       return
     }
 
     // Convert all centers to display space up front
     const display = {}
-    for (const id of ids) {
-      display[id] = {
-        ...markers[id],
-        displayCenter: this._toDisplay(markers[id].center),
-        displayCorners: markers[id].corners.map(c => this._toDisplay(c)),
+    for (const role of roles) {
+      display[role] = {
+        ...markers[role],
+        displayCenter: this._toDisplay(markers[role].center),
       }
     }
 
-    // Draw each marker
-    for (const id of ids) {
-      if (opts.showCorners) {
-        this._drawCorners(display[id].displayCorners, MARKER_COLORS[id] || FALLBACK_COLOR)
-      }
-      this._drawMarkerDot(display[id].displayCenter, MARKER_COLORS[id] || FALLBACK_COLOR, id)
+    // Draw landmark dots
+    for (const role of roles) {
+      this._drawLandmarkDot(
+        display[role].displayCenter,
+        MARKER_COLORS[role] || FALLBACK_COLOR,
+        display[role].visibility ?? 1,
+      )
     }
 
-    // Draw bones using explicit ID order: 0→1→2 (thigh→knee→shin)
-    // Never sort by position — ID assignment is authoritative
-    const m0 = display[0]
-    const m1 = display[1]
-    const m2 = display[2]
+    const p = display['proximal']
+    const j = display['joint']
+    const d = display['distal']
 
-    if (m0 && m1 && m2) {
-      this._drawBone(m0.displayCenter, m1.displayCenter)  // thigh → knee
-      this._drawBone(m1.displayCenter, m2.displayCenter)  // knee  → shin
+    if (p && j && d) {
+      this._drawBone(p.displayCenter, j.displayCenter)
+      this._drawBone(j.displayCenter, d.displayCenter)
 
       if (interiorAngle !== null && interiorAngle !== undefined) {
-        this._drawAngleArc(m0.displayCenter, m1.displayCenter, m2.displayCenter, interiorAngle)
-        this._drawAngleLabel(m1.displayCenter, 180 - interiorAngle)
+        this._drawAngleArc(p.displayCenter, j.displayCenter, d.displayCenter, interiorAngle)
+        this._drawAngleLabel(j.displayCenter, 180 - interiorAngle)
       }
     } else {
-      // Partial lines for whatever is visible
-      if (m0 && m1) this._drawBone(m0.displayCenter, m1.displayCenter)
-      if (m1 && m2) this._drawBone(m1.displayCenter, m2.displayCenter)
-      this._drawMissingWarning(ids.length)
+      if (p && j) this._drawBone(p.displayCenter, j.displayCenter)
+      if (j && d) this._drawBone(j.displayCenter, d.displayCenter)
+      this._drawMissingWarning(roles.length)
     }
   }
 
@@ -168,26 +165,27 @@ export class Overlay {
   // _scalePx() scales UI element sizes (dots, line widths) relative to
   // the display height so they look consistent on all screen sizes.
 
-  _drawMarkerDot(center, color, id) {
-    const r   = this._scalePx(12)
+  _drawLandmarkDot(center, color, visibility = 1) {
+    const r   = this._scalePx(10)
     const ctx = this.ctx
 
     ctx.beginPath()
     ctx.arc(center.x, center.y, r, 0, Math.PI * 2)
     ctx.fillStyle   = color
-    ctx.globalAlpha = 0.9
+    ctx.globalAlpha = 0.85
     ctx.fill()
+    ctx.globalAlpha = 1
 
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)'
-    ctx.lineWidth   = this._scalePx(2)
+    // Confidence ring — dashed when visibility is low
+    ctx.beginPath()
+    ctx.arc(center.x, center.y, r + this._scalePx(3), 0, Math.PI * 2)
+    ctx.strokeStyle = color
+    ctx.lineWidth   = this._scalePx(1.5)
+    ctx.globalAlpha = visibility
+    if (visibility < 0.7) ctx.setLineDash([this._scalePx(3), this._scalePx(3)])
     ctx.stroke()
-
-    ctx.globalAlpha  = 1
-    ctx.fillStyle    = '#000'
-    ctx.font         = `bold ${this._scalePx(10)}px -apple-system, sans-serif`
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(id.toString(), center.x, center.y)
+    ctx.setLineDash([])
+    ctx.globalAlpha = 1
   }
 
   _drawBone(from, to) {
@@ -249,7 +247,7 @@ export class Overlay {
 
   _drawMissingWarning(foundCount) {
     const ctx  = this.ctx
-    const text = `${foundCount}/3 markers`
+    const text = `${foundCount}/3 landmarks`
     const displayH = this.canvas.clientHeight
 
     ctx.font         = `${this._scalePx(16)}px -apple-system, sans-serif`

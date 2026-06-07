@@ -60,9 +60,29 @@ describe('SessionRecorder', () => {
     expect(session.id).toMatch(/^sess_\d+$/)
     expect(session.timestamp).toBeTypeOf('number')
     expect(session.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-    expect(session.joint).toBe('knee_right')
+    expect(session.joint).toBe('knee')
+    expect(session.side).toBe('right')
     expect(session.duration_s).toBeGreaterThanOrEqual(0)
     expect(session.app_version).toBe('0.1.0')
+  })
+
+  // ─── setContext ───────────────────────────────────────────────────
+
+  it('setContext values appear in the session object', () => {
+    recorder.setContext('elbow', 'left')
+    recorder.start()
+    recorder.record(45)
+    const session = recorder.stop()
+    expect(session.joint).toBe('elbow')
+    expect(session.side).toBe('left')
+  })
+
+  it('defaults to knee/right when setContext not called', () => {
+    recorder.start()
+    recorder.record(45)
+    const session = recorder.stop()
+    expect(session.joint).toBe('knee')
+    expect(session.side).toBe('right')
   })
 
   // ─── Edge cases ───────────────────────────────────────────────────

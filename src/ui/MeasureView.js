@@ -3,7 +3,7 @@
  */
 
 import { Camera }            from '../detection/camera.js'
-import { ArucoDetector }     from '../detection/aruco.js'
+import { PoseDetector }      from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
 import { jointAngle, toFlexionAngle, AngleSmoother, DeadZoneFilter } from '../core/angle.js'
 import { SessionRecorder }   from '../core/session.js'
@@ -19,7 +19,7 @@ export class MeasureView {
     this.onShowHistory = onShowHistory
 
     this.camera      = new Camera()
-    this.detector    = new ArucoDetector()
+    this.detector    = new PoseDetector()
     this.overlay     = new Overlay()
     this.smoother    = new AngleSmoother(10)
     this.deadZone    = new DeadZoneFilter(1.5)
@@ -29,7 +29,8 @@ export class MeasureView {
     this._loopActive    = false
     this._lastDetection = 0
     this._rafId         = null
-    this._hiddenCanvas  = null
+    this._joint         = 'knee'
+    this._side          = 'right'
 
     this.currentAngle  = null
     this._pendingSession = null  // holds session between stop() and note entry
@@ -66,10 +67,24 @@ export class MeasureView {
           </div>
         </div>
 
+        <!-- Joint & side selector — shown once camera starts -->
+        <div id="joint-side-row" class="joint-side-row" style="display:none">
+          <div class="seg-group" id="seg-joint">
+            <button class="seg-btn active" data-joint="knee">Knee</button>
+            <button class="seg-btn" data-joint="hip">Hip</button>
+            <button class="seg-btn" data-joint="shoulder">Shoulder</button>
+            <button class="seg-btn" data-joint="elbow">Elbow</button>
+          </div>
+          <div class="seg-group" id="seg-side">
+            <button class="seg-btn active" data-side="right">Right</button>
+            <button class="seg-btn" data-side="left">Left</button>
+          </div>
+        </div>
+
         <!-- Live angle readout -->
         <div class="angle-panel">
           <div id="angle-display" class="angle-display">--°</div>
-          <div id="angle-label" class="angle-label">Knee flexion</div>
+          <div id="angle-label" class="angle-label">Right Knee flexion</div>
 
           <!-- Calibration status pill -->
           <div id="cal-status" class="cal-status"></div>
@@ -377,6 +392,42 @@ export class MeasureView {
           font-size: 14px;
           flex-shrink: 0;
         }
+
+        .joint-side-row {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 8px 16px 4px;
+          background: #111;
+          border-top: 1px solid #1e1e1e;
+          flex-shrink: 0;
+        }
+
+        .seg-group {
+          display: flex;
+          gap: 4px;
+        }
+
+        .seg-btn {
+          flex: 1;
+          padding: 6px 4px;
+          font-size: 12px;
+          font-weight: 600;
+          background: #1a1a1a;
+          color: #666;
+          border: 1px solid #2a2a2a;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: background 0.15s, color 0.15s;
+        }
+
+        .seg-btn.active {
+          background: #222;
+          color: #f0f0f0;
+          border-color: #444;
+        }
+
+        .seg-btn:active { opacity: 0.7; }
       </style>
     `
   }
@@ -409,7 +460,11 @@ export class MeasureView {
     this._saveFeedback   = document.getElementById('save-feedback')
     this._errorMsg       = document.getElementById('error-msg')
 
-    this._hiddenCanvas = document.createElement('canvas')
+    this._jointSideRow = document.getElementById('joint-side-row')
+    this._segJoint     = document.getElementById('seg-joint')
+    this._segSide      = document.getElementById('seg-side')
+    this._angleLabel   = document.getElementById('angle-label')
+
     this.camera.attach(this._video)
     this.overlay.attach(this._overlayCanvas)
   }
@@ -430,6 +485,15 @@ export class MeasureView {
       this._stopCamera()
       this.onShowHistory()
     })
+
+    this._segJoint.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-joint]')
+      if (btn) this._selectJoint(btn.dataset.joint)
+    })
+    this._segSide.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-side]')
+      if (btn) this._selectSide(btn.dataset.side)
+    })
   }
 
   // ─── Camera lifecycle ────────────────────────────────────────────────
@@ -443,10 +507,14 @@ export class MeasureView {
       const { width, height } = await this.camera.start()
       this.overlay.resize(width, height)
 
-      this._btnStart.style.display       = 'none'
-      this._btnStop.style.display        = 'block'
-      this._activeControls.style.display = 'flex'
-      this._setStatus('running', 'Looking for markers…')
+      this._setStatus('idle', 'Loading AI model…')
+      await this.detector.init()
+
+      this._btnStart.style.display        = 'none'
+      this._btnStop.style.display         = 'block'
+      this._activeControls.style.display  = 'flex'
+      this._jointSideRow.style.display    = 'flex'
+      this._setStatus('running', 'Detecting pose…')
       this._startLoop()
     } catch (err) {
       this._showError(err.message)
@@ -465,13 +533,14 @@ export class MeasureView {
     this.smoother.reset()
     this.deadZone.reset()
 
-    this._btnStop.style.display        = 'none'
-    this._btnStart.style.display       = 'block'
-    this._btnStart.disabled            = false
-    this._activeControls.style.display = 'none'
-    this._romBar.style.display         = 'none'
-    this._calProgress.style.display    = 'none'
-    this._angleDisplay.className       = 'angle-display'
+    this._btnStop.style.display         = 'none'
+    this._btnStart.style.display        = 'block'
+    this._btnStart.disabled             = false
+    this._activeControls.style.display  = 'none'
+    this._jointSideRow.style.display    = 'none'
+    this._romBar.style.display          = 'none'
+    this._calProgress.style.display     = 'none'
+    this._angleDisplay.className        = 'angle-display'
     this._setStatus('idle', 'Tap to start')
     this._updateAngleDisplay(null)
   }
@@ -511,7 +580,7 @@ export class MeasureView {
     this._btnRecordStart.disabled = false
     this._calProgress.style.display = 'none'
     this._angleDisplay.classList.remove('sampling')
-    this._setStatus('running', '3/3 markers')
+    this._setStatus('running', 'Detecting pose…')
   }
 
   _updateCalibrationUI() {
@@ -532,6 +601,7 @@ export class MeasureView {
   // ─── Recording lifecycle ─────────────────────────────────────────────
 
   _startRecording() {
+    this.recorder.setContext(this._joint, this._side)
     this.recorder.start()
     this._btnRecordStart.style.display = 'none'
     this._btnRecordStop.style.display  = 'block'
@@ -549,10 +619,10 @@ export class MeasureView {
     this._btnRecordStart.style.display = 'block'
     this._btnCalibrate.disabled        = false
     this._angleDisplay.classList.remove('recording')
-    this._setStatus('running', '3/3 markers')
+    this._setStatus('running', 'Detecting pose…')
 
     if (!session) {
-      this._showError('No angle data recorded — make sure all 3 markers are visible.')
+      this._showError('No angle data recorded — make sure the selected joint is clearly visible.')
       return
     }
 
@@ -619,10 +689,10 @@ export class MeasureView {
   }
 
   _runDetection() {
-    const imageData = this.camera.captureFrame(this._hiddenCanvas)
-    if (!imageData) return
+    const videoEl = this.camera.videoEl
+    if (!videoEl || !this.detector.isReady) return
 
-    const { markers, allFound } = this.detector.detect(imageData)
+    const { markers, allFound } = this.detector.detect(videoEl)
 
     // ── Angle calculation ──────────────────────────────────────────
     let rawFlexion  = null
@@ -693,9 +763,9 @@ export class MeasureView {
       this._setStatus('recording', `● ${this.recorder.sampleCount} samples`)
       return
     }
-    if (allFound)             this._setStatus('running',  '3/3 markers')
-    else if (foundCount > 0)  this._setStatus('lost',     `${foundCount}/3 markers`)
-    else                      this._setStatus('lost',     'No markers')
+    if (allFound)             this._setStatus('running',  'Pose detected')
+    else if (foundCount > 0)  this._setStatus('lost',     `${foundCount}/3 landmarks`)
+    else                      this._setStatus('lost',     'No pose detected')
   }
 
   _setStatus(type, text) {
@@ -720,5 +790,35 @@ export class MeasureView {
 
   _hideError() {
     this._errorMsg.style.display = 'none'
+  }
+
+  // ─── Joint / side selection ──────────────────────────────────────────
+
+  _selectJoint(joint) {
+    this._joint = joint
+    this.detector.setJoint(joint)
+    this._segJoint.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.joint === joint)
+    })
+    this._updateJointLabel()
+    this.calibration.clear()
+    this._updateCalibrationUI()
+  }
+
+  _selectSide(side) {
+    this._side = side
+    this.detector.setSide(side)
+    this._segSide.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.side === side)
+    })
+    this._updateJointLabel()
+    this.calibration.clear()
+    this._updateCalibrationUI()
+  }
+
+  _updateJointLabel() {
+    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow' }
+    const side  = this._side.charAt(0).toUpperCase() + this._side.slice(1)
+    this._angleLabel.textContent = `${side} ${names[this._joint]} flexion`
   }
 }
