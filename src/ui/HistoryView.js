@@ -177,12 +177,13 @@ export class HistoryView {
     const date     = this._formatDate(session.date)
     const time     = this._formatTime(session.timestamp)
     const duration = this._formatDuration(session.duration_s)
+    const joint    = this._jointLabel(session)
 
     return `
       <div class="session-row" data-id="${session.id}">
         <div class="session-info">
           <div class="session-date">${date} <span class="session-time">${time}</span></div>
-          <div class="session-meta">${duration} · ${session.samples} samples</div>
+          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}</div>
           ${session.notes ? `<div class="session-notes">${session.notes}</div>` : ''}
         </div>
         <div class="session-stats">
@@ -204,6 +205,18 @@ export class HistoryView {
     const sessions = loadSessions()
     this._renderChart(sessions)
     this._renderList(sessions)
+  }
+
+  _jointLabel(session) {
+    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow' }
+    if (session.side) {
+      const side = session.side.charAt(0).toUpperCase() + session.side.slice(1)
+      return `${side} ${names[session.joint] || session.joint}`
+    }
+    // old format: 'knee_right' → 'Right Knee'
+    const [joint, side] = session.joint.split('_')
+    if (side) return `${side.charAt(0).toUpperCase() + side.slice(1)} ${names[joint] || joint}`
+    return names[session.joint] || session.joint
   }
 
   // ─── Private: formatters ─────────────────────────────────────────────

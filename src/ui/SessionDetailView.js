@@ -51,9 +51,10 @@ export class SessionDetailView {
     document.getElementById('stat-dur').textContent  = this._formatDuration(s.duration_s)
     document.getElementById('stat-samples').textContent = `${s.samples} samples`
 
-    // Header date/time
+    // Header date/time and joint label
     document.getElementById('detail-title').textContent =
       `${this._formatDate(s.date)}  ${this._formatTime(s.timestamp)}`
+    document.getElementById('detail-joint').textContent = this._jointLabel(s)
 
     // Notes
     const notesEl = document.getElementById('detail-notes')
@@ -161,6 +162,17 @@ export class SessionDetailView {
     this.onBack()
   }
 
+  _jointLabel(session) {
+    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow' }
+    if (session.side) {
+      const side = session.side.charAt(0).toUpperCase() + session.side.slice(1)
+      return `${side} ${names[session.joint] || session.joint}`
+    }
+    const [joint, side] = session.joint.split('_')
+    if (side) return `${side.charAt(0).toUpperCase() + side.slice(1)} ${names[joint] || joint}`
+    return names[session.joint] || session.joint
+  }
+
   // ─── Formatters ──────────────────────────────────────────────────────
 
   _formatDate(dateStr) {
@@ -189,7 +201,10 @@ export class SessionDetailView {
 
         <div class="detail-header">
           <button id="btn-detail-back" class="btn-ghost btn-back">← Back</button>
-          <div id="detail-title" class="detail-title"></div>
+          <div class="detail-title-group">
+            <div id="detail-title" class="detail-title"></div>
+            <div id="detail-joint" class="detail-joint"></div>
+          </div>
           <button id="btn-detail-delete" class="btn-delete-sm">Delete</button>
         </div>
 
@@ -250,13 +265,24 @@ export class SessionDetailView {
           z-index: 10;
         }
 
+        .detail-title-group {
+          flex: 1;
+          margin: 0 8px;
+          text-align: center;
+          min-width: 0;
+        }
+
         .detail-title {
           font-size: 14px;
           font-weight: 500;
           color: #f0f0f0;
-          text-align: center;
-          flex: 1;
-          margin: 0 8px;
+        }
+
+        .detail-joint {
+          font-size: 12px;
+          color: #60a5fa;
+          margin-top: 2px;
+          font-weight: 500;
         }
 
         .btn-back {
