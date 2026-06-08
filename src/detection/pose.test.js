@@ -158,9 +158,11 @@ describe('PoseDetector._resolveLandmark (midpoint)', () => {
     expect(result.visibility).toBe(0.9) // max of 0.9, 0.5
   })
 
-  it('returns null when max visibility is below threshold', () => {
+  it('returns null when either landmark is below threshold', () => {
     const detector = new PoseDetector()
-    const lmNorm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.1 }))
+    const lmNorm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.95 }))
+    // Make knee (25) invisible — ankle (27) is still visible
+    lmNorm[25] = { x: 0.5, y: 0.5, visibility: 0.1 }
     const result = detector._resolveLandmark({ midpoint: [25, 27] }, lmNorm, 1000, 1000)
     expect(result).toBeNull()
   })

@@ -117,12 +117,13 @@ export class PoseDetector {
       const [a, b] = cfg.midpoint
       const lmA = lmNorm[a], lmB = lmNorm[b]
       if (!lmA || !lmB) return null
-      const vis = Math.max(lmA.visibility ?? 0, lmB.visibility ?? 0)
-      if (vis < MIN_VISIBILITY) return null
+      // Both landmarks must be visible — if the knee is out of frame the
+      // midpoint would be unreliable and cause jumping dots
+      if (lmA.visibility < MIN_VISIBILITY || lmB.visibility < MIN_VISIBILITY) return null
       return {
         x:          ((lmA.x + lmB.x) / 2) * vw,
         y:          ((lmA.y + lmB.y) / 2) * vh,
-        visibility: vis,
+        visibility: Math.max(lmA.visibility, lmB.visibility),
       }
     }
     return null

@@ -120,14 +120,14 @@ export class Overlay {
     const roles = Object.keys(markers)
     if (roles.length === 0) {
       const hint = opts.joint === 'ankle'
-        ? 'Sit with foot hanging free · big toe toward camera'
+        ? 'Frame knee to foot · big toe toward camera'
         : 'Point camera at subject'
       this._drawHint(hint)
       return
     }
 
     if (opts.joint === 'ankle') {
-      this._drawSetupHint('Foot hanging free · big toe toward camera')
+      this._drawSetupHint('Frame knee to foot · big toe toward camera')
     }
 
     // Convert all centers to display space up front
