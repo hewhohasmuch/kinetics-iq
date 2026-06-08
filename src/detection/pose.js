@@ -5,7 +5,9 @@ const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmark
 const MIN_VISIBILITY = 0.3
 
 // MediaPipe landmark indices (subject-anatomical left/right).
-// Each entry is { proximal, joint, distal } landmark indices.
+// proximal/joint/distal can be:
+//   - a number: single landmark index
+//   - { midpoint: [a, b] }: average of two landmarks (visibility = max of the two)
 const JOINT_CONFIG = {
   knee: {
     left:  { proximal: 23, joint: 25, distal: 27 },
@@ -24,8 +26,10 @@ const JOINT_CONFIG = {
     right: { proximal: 12, joint: 14, distal: 16 },
   },
   ankle: {
-    left:  { proximal: 25, joint: 27, distal: 31 },  // knee → ankle → foot index
-    right: { proximal: 26, joint: 28, distal: 32 },
+    // Proximal = shin midpoint (knee + ankle average) so the knee can be
+    // partially out of frame while still capturing the shin's direction.
+    left:  { proximal: { midpoint: [25, 27] }, joint: 27, distal: 31 },
+    right: { proximal: { midpoint: [26, 28] }, joint: 28, distal: 32 },
   },
 }
 
@@ -81,17 +85,16 @@ export class PoseDetector {
     let   allFound = true
 
     for (const role of ['proximal', 'joint', 'distal']) {
-      const idx = cfg[role]
-      const lm  = lmNorm[idx]
-      if (!lm || lm.visibility < MIN_VISIBILITY) {
+      const resolved = this._resolveLandmark(cfg[role], lmNorm, vw, vh)
+      if (!resolved) {
         allFound = false
         continue
       }
       markers[role] = {
         id:         role,
-        center:     { x: lm.x * vw, y: lm.y * vh },
+        center:     { x: resolved.x, y: resolved.y },
         corners:    [],
-        visibility: lm.visibility,
+        visibility: resolved.visibility,
       }
     }
 
@@ -100,6 +103,29 @@ export class PoseDetector {
       allFound: allFound && Object.keys(markers).length === 3,
       foundIds: Object.keys(markers),
     }
+  }
+
+  // Resolve a landmark config entry to { x, y, visibility } in video pixel space,
+  // or null if below the visibility threshold.
+  _resolveLandmark(cfg, lmNorm, vw, vh) {
+    if (typeof cfg === 'number') {
+      const lm = lmNorm[cfg]
+      if (!lm || lm.visibility < MIN_VISIBILITY) return null
+      return { x: lm.x * vw, y: lm.y * vh, visibility: lm.visibility }
+    }
+    if (cfg.midpoint) {
+      const [a, b] = cfg.midpoint
+      const lmA = lmNorm[a], lmB = lmNorm[b]
+      if (!lmA || !lmB) return null
+      const vis = Math.max(lmA.visibility ?? 0, lmB.visibility ?? 0)
+      if (vis < MIN_VISIBILITY) return null
+      return {
+        x:          ((lmA.x + lmB.x) / 2) * vw,
+        y:          ((lmA.y + lmB.y) / 2) * vh,
+        visibility: vis,
+      }
+    }
+    return null
   }
 
   // Drop-in replacement for ArucoDetector.getJointPoints().

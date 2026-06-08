@@ -124,14 +124,67 @@ describe('PoseDetector', () => {
 })
 
 describe('JOINT_CONFIG', () => {
-  it('has entries for all 4 joints × 2 sides', () => {
+  const isValidLandmark = v =>
+    typeof v === 'number' || (Array.isArray(v?.midpoint) && v.midpoint.length === 2)
+
+  it('has valid landmark entries for all 5 joints × 2 sides', () => {
     for (const joint of ['knee', 'hip', 'shoulder', 'elbow', 'ankle']) {
       for (const side of ['left', 'right']) {
         const cfg = JOINT_CONFIG[joint][side]
-        expect(typeof cfg.proximal).toBe('number')
+        expect(isValidLandmark(cfg.proximal)).toBe(true)
         expect(typeof cfg.joint).toBe('number')
         expect(typeof cfg.distal).toBe('number')
       }
     }
+  })
+
+  it('ankle proximal is a midpoint config', () => {
+    expect(JOINT_CONFIG.ankle.left.proximal).toEqual({ midpoint: [25, 27] })
+    expect(JOINT_CONFIG.ankle.right.proximal).toEqual({ midpoint: [26, 28] })
+  })
+})
+
+describe('PoseDetector._resolveLandmark (midpoint)', () => {
+  it('averages two landmark positions and uses max visibility', () => {
+    const detector = new PoseDetector()
+    const lmNorm = Array.from({ length: 33 }, () => ({ x: 0, y: 0, visibility: 0 }))
+    lmNorm[25] = { x: 0.2, y: 0.4, visibility: 0.9 }
+    lmNorm[27] = { x: 0.6, y: 0.8, visibility: 0.5 }
+
+    const result = detector._resolveLandmark({ midpoint: [25, 27] }, lmNorm, 1000, 1000)
+    expect(result).not.toBeNull()
+    expect(result.x).toBeCloseTo(400)   // (0.2 + 0.6) / 2 * 1000
+    expect(result.y).toBeCloseTo(600)   // (0.4 + 0.8) / 2 * 1000
+    expect(result.visibility).toBe(0.9) // max of 0.9, 0.5
+  })
+
+  it('returns null when max visibility is below threshold', () => {
+    const detector = new PoseDetector()
+    const lmNorm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, visibility: 0.1 }))
+    const result = detector._resolveLandmark({ midpoint: [25, 27] }, lmNorm, 1000, 1000)
+    expect(result).toBeNull()
+  })
+
+  it('ankle detection uses midpoint for proximal', async () => {
+    const { mockDetectForVideo: mock } = vi.hoisted(() => ({ mockDetectForVideo: vi.fn() }))
+    // Use the already-mocked module — just set up fresh landmarks
+    const detector = new PoseDetector()
+    await detector.init()
+    detector.setJoint('ankle')
+    detector.setSide('right')
+
+    // right ankle: proximal=midpoint(26,28), joint=28, distal=32
+    // Place knee(26) and ankle(28) at different positions so midpoint is distinct
+    const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.95 }))
+    lm[26] = { x: 0.2, y: 0.2, z: 0, visibility: 0.95 }  // knee
+    lm[28] = { x: 0.4, y: 0.6, z: 0, visibility: 0.95 }  // ankle (joint)
+    lm[32] = { x: 0.8, y: 0.8, z: 0, visibility: 0.95 }  // foot index
+    mockDetectForVideo.mockReturnValue({ landmarks: [lm] })
+
+    const result = detector.detect({ videoWidth: 1000, videoHeight: 1000 })
+    expect(result.allFound).toBe(true)
+    // proximal should be midpoint of knee(0.2,0.2) and ankle(0.4,0.6) = (0.3,0.4)
+    expect(result.markers['proximal'].center.x).toBeCloseTo(300)
+    expect(result.markers['proximal'].center.y).toBeCloseTo(400)
   })
 })
