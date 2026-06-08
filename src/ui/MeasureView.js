@@ -731,7 +731,7 @@ export class MeasureView {
     // ── Overlay ────────────────────────────────────────────────────
     const videoDims = this.camera.getDimensions()
     this.overlay.resize(videoDims.width, videoDims.height)
-    this.overlay.draw(markers, rawFlexion !== null ? 180 - rawFlexion : null)
+    this.overlay.draw(markers, rawFlexion !== null ? 180 - rawFlexion : null, { joint: this._joint })
 
     // ── UI ─────────────────────────────────────────────────────────
     this._updateAngleDisplay(displayAngle)

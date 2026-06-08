@@ -56,7 +56,7 @@ describe('PoseDetector', () => {
     await detector.init()
     // knee right: proximal=24, joint=26, distal=28 — make distal invisible
     mockDetectForVideo.mockReturnValue({
-      landmarks: [makeLandmarks({ 28: { x: 0.5, y: 0.5, z: 0, visibility: 0.3 } })],
+      landmarks: [makeLandmarks({ 28: { x: 0.5, y: 0.5, z: 0, visibility: 0.2 } })],
     })
     const result = detector.detect(makeVideoEl())
     expect(result.allFound).toBe(false)

@@ -119,8 +119,15 @@ export class Overlay {
 
     const roles = Object.keys(markers)
     if (roles.length === 0) {
-      this._drawHint('Point camera at subject')
+      const hint = opts.joint === 'ankle'
+        ? 'Sit with foot hanging free · keep full leg in frame'
+        : 'Point camera at subject'
+      this._drawHint(hint)
       return
+    }
+
+    if (opts.joint === 'ankle') {
+      this._drawSetupHint('Foot hanging free for best results')
     }
 
     // Convert all centers to display space up front
@@ -257,6 +264,15 @@ export class Overlay {
     ctx.globalAlpha  = 0.9
     ctx.fillText(text, this.canvas.clientWidth / 2, displayH - this._scalePx(50))
     ctx.globalAlpha  = 1
+  }
+
+  _drawSetupHint(text) {
+    const ctx = this.ctx
+    ctx.font         = `${this._scalePx(12)}px -apple-system, sans-serif`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle    = 'rgba(250,204,21,0.75)'
+    ctx.fillText(text, this.canvas.clientWidth / 2, this._scalePx(12))
   }
 
   _drawHint(text) {

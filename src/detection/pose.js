@@ -2,7 +2,7 @@ import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 
 const WASM_CDN  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
-const MIN_VISIBILITY = 0.5
+const MIN_VISIBILITY = 0.3
 
 // MediaPipe landmark indices (subject-anatomical left/right).
 // Each entry is { proximal, joint, distal } landmark indices.
@@ -24,7 +24,7 @@ const JOINT_CONFIG = {
     right: { proximal: 12, joint: 14, distal: 16 },
   },
   ankle: {
-    left:  { proximal: 25, joint: 27, distal: 31 },
+    left:  { proximal: 25, joint: 27, distal: 31 },  // knee → ankle → foot index
     right: { proximal: 26, joint: 28, distal: 32 },
   },
 }
