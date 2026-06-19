@@ -604,6 +604,8 @@ export class MeasureView {
   _startRecording() {
     this.recorder.setContext(this._joint, this._side)
     this.recorder.start()
+    this._peakFrame = null
+    this._peakAngle = -Infinity
     this._btnRecordStart.style.display = 'none'
     this._btnRecordStop.style.display  = 'block'
     this._btnCalibrate.disabled        = true
@@ -626,6 +628,9 @@ export class MeasureView {
       this._showError('No angle data recorded — make sure the selected joint is clearly visible.')
       return
     }
+
+    SessionRecorder.attachFrame(session, this._peakFrame)
+    this._peakFrame = null
 
     // Hold the session, show notes panel
     this._pendingSession = session
@@ -726,6 +731,10 @@ export class MeasureView {
     if (this.recorder.isActive) {
       this.recorder.record(displayAngle)
       this._updateRomBar()
+      if (displayAngle !== null && displayAngle > this._peakAngle) {
+        this._peakAngle = displayAngle
+        this._capturePeakFrame()
+      }
     }
 
     // ── Overlay ────────────────────────────────────────────────────
@@ -747,6 +756,41 @@ export class MeasureView {
     } else {
       this._angleDisplay.textContent = `${Math.round(angle)}°`
       this._angleDisplay.classList.remove('lost')
+    }
+  }
+
+  _capturePeakFrame() {
+    try {
+      const overlayCanvas = this._overlayCanvas
+      const videoEl = this.camera.videoEl
+      if (!overlayCanvas || !videoEl) return
+
+      const w = overlayCanvas.width
+      const h = overlayCanvas.height
+      const offscreen = document.createElement('canvas')
+      offscreen.width  = w
+      offscreen.height = h
+      const ctx = offscreen.getContext('2d')
+
+      // Draw video frame scaled to match the object-fit:cover transform
+      const o = this.overlay
+      const dpr = window.devicePixelRatio || 1
+      ctx.save()
+      ctx.scale(dpr, dpr)
+      ctx.drawImage(
+        videoEl,
+        o._offsetX, o._offsetY,
+        videoEl.videoWidth * o._scale,
+        videoEl.videoHeight * o._scale
+      )
+      ctx.restore()
+
+      // Draw overlay (landmarks + arc) on top
+      ctx.drawImage(overlayCanvas, 0, 0)
+
+      this._peakFrame = offscreen.toDataURL('image/jpeg', 0.82)
+    } catch (_) {
+      // Non-critical — silently skip if capture fails
     }
   }
 
