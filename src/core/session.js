@@ -112,6 +112,12 @@ export class SessionRecorder {
     return { ...session, notes: (notes || '').trim().slice(0, 200) }
   }
 
+  static attachFrame(session, frameDataUrl) {
+    if (!session || !frameDataUrl) return session
+    session.peakFrame = frameDataUrl
+    return session
+  }
+
   get isActive()     { return this._active }
   get sampleCount()  { return this._angles.length }
 

@@ -65,6 +65,14 @@ export class SessionDetailView {
       notesEl.style.display  = 'none'
     }
 
+    // Peak frame
+    const frameEl = document.getElementById('detail-peak-frame')
+    if (s.peakFrame && frameEl) {
+      frameEl.querySelector('img').src = s.peakFrame
+      frameEl.querySelector('.peak-frame-caption').textContent = `Peak: ${s.max}°`
+      frameEl.style.display = 'block'
+    }
+
     // Chart
     this._renderChart(s.angleTimeline, s.duration_s)
 
@@ -231,6 +239,13 @@ export class SessionDetailView {
         <!-- Notes -->
         <div id="detail-notes" class="detail-notes"></div>
 
+        <!-- Peak ROM frame -->
+        <div id="detail-peak-frame" class="peak-frame-section" style="display:none">
+          <div class="chart-section-label">Peak ROM frame</div>
+          <img class="peak-frame-img" alt="Peak ROM pose" />
+          <div class="peak-frame-caption"></div>
+        </div>
+
         <!-- Timeline chart -->
         <div class="chart-section">
           <div class="chart-section-label">Angle timeline</div>
@@ -363,6 +378,26 @@ export class SessionDetailView {
           color: #aaa;
           font-style: italic;
           line-height: 1.5;
+        }
+
+        /* Peak frame */
+        .peak-frame-section {
+          padding: 16px 16px 0;
+        }
+
+        .peak-frame-img {
+          width: 100%;
+          border-radius: 10px;
+          display: block;
+          background: #111;
+        }
+
+        .peak-frame-caption {
+          font-size: 12px;
+          color: #4ade80;
+          font-weight: 600;
+          text-align: center;
+          margin-top: 6px;
         }
 
         /* Timeline chart */
