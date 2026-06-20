@@ -27,14 +27,14 @@ export class SessionRecorder {
     this._active    = false
     this._joint     = 'knee'
     this._side      = 'right'
-    this._position  = null
+    this._position  = 'prone'
   }
 
   // Set the joint, side, and position before start() so they appear in the saved session.
-  setContext(joint, side, position = null) {
+  setContext(joint, side, position) {
     this._joint    = joint
     this._side     = side
-    this._position = position ?? null
+    this._position = position ?? 'prone'
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────

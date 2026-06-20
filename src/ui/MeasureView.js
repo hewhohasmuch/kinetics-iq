@@ -31,7 +31,8 @@ export class MeasureView {
     this._rafId         = null
     this._joint         = 'knee'
     this._side          = 'right'
-    this._position      = null
+    this._position      = 'prone'
+    this._drawerOpen    = false
 
     this.currentAngle  = null
     this._pendingSession = null  // holds session between stop() and note entry
@@ -66,26 +67,33 @@ export class MeasureView {
             <div id="cal-bar" class="cal-bar"></div>
             <div class="cal-progress-label">Hold still…</div>
           </div>
-        </div>
 
-        <!-- Joint & side selector — shown once camera starts -->
-        <div id="joint-side-row" class="joint-side-row" style="display:none">
-          <div class="seg-group" id="seg-joint">
-            <button class="seg-btn active" data-joint="knee">Knee</button>
-            <button class="seg-btn" data-joint="hip">Hip</button>
-            <button class="seg-btn" data-joint="shoulder">Shoulder</button>
-            <button class="seg-btn" data-joint="elbow">Elbow</button>
-            <button class="seg-btn" data-joint="ankle">Ankle</button>
+          <!-- Collapsible selector drawer — peeks as a handle, slides up on tap -->
+          <div id="selector-drawer" class="selector-drawer" style="display:none">
+            <div id="selector-handle" class="selector-handle">
+              <div class="handle-grip"></div>
+              <span id="handle-label">Right Knee · Prone</span>
+              <div class="handle-chevron">›</div>
+            </div>
+            <div class="selector-rows">
+              <div class="seg-group" id="seg-joint">
+                <button class="seg-btn active" data-joint="knee">Knee</button>
+                <button class="seg-btn" data-joint="hip">Hip</button>
+                <button class="seg-btn" data-joint="shoulder">Shoulder</button>
+                <button class="seg-btn" data-joint="elbow">Elbow</button>
+                <button class="seg-btn" data-joint="ankle">Ankle</button>
+              </div>
+              <div class="seg-group" id="seg-side">
+                <button class="seg-btn active" data-side="right">Right</button>
+                <button class="seg-btn" data-side="left">Left</button>
+              </div>
+              <div class="seg-group" id="seg-position">
+                <button class="seg-btn active" data-position="prone">Prone</button>
+                <button class="seg-btn" data-position="supine">Supine</button>
+                <button class="seg-btn" data-position="seated">Seated</button>
+              </div>
+            </div>
           </div>
-          <div class="seg-group" id="seg-side">
-            <button class="seg-btn active" data-side="right">Right</button>
-            <button class="seg-btn" data-side="left">Left</button>
-          </div>
-        </div>
-
-        <!-- Position selector — shown only for knee and hip -->
-        <div id="position-row" class="joint-side-row" style="display:none">
-          <div class="seg-group" id="seg-position"></div>
         </div>
 
         <!-- Live angle readout -->
@@ -400,14 +408,62 @@ export class MeasureView {
           flex-shrink: 0;
         }
 
-        .joint-side-row {
+        .selector-drawer {
+          position: absolute;
+          bottom: 0; left: 0; right: 0;
+          background: rgba(10, 10, 10, 0.82);
+          backdrop-filter: blur(6px);
+          -webkit-backdrop-filter: blur(6px);
+          border-top: 1px solid rgba(255, 255, 255, 0.08);
+          transform: translateY(calc(100% - 36px));
+          transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .selector-drawer.open {
+          transform: translateY(0);
+        }
+
+        .selector-handle {
+          height: 36px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          cursor: pointer;
+          user-select: none;
+        }
+
+        .handle-grip {
+          width: 32px;
+          height: 3px;
+          background: rgba(255, 255, 255, 0.3);
+          border-radius: 2px;
+        }
+
+        #handle-label {
+          font-size: 12px;
+          font-weight: 600;
+          color: #aaa;
+          letter-spacing: 0.02em;
+        }
+
+        .handle-chevron {
+          font-size: 16px;
+          color: #555;
+          transform: rotate(-90deg);
+          transition: transform 0.25s;
+          line-height: 1;
+        }
+
+        .selector-drawer.open .handle-chevron {
+          transform: rotate(90deg);
+        }
+
+        .selector-rows {
           display: flex;
           flex-direction: column;
-          gap: 6px;
-          padding: 8px 16px 4px;
-          background: #111;
-          border-top: 1px solid #1e1e1e;
-          flex-shrink: 0;
+          gap: 5px;
+          padding: 4px 12px 12px;
         }
 
         .seg-group {
@@ -417,21 +473,21 @@ export class MeasureView {
 
         .seg-btn {
           flex: 1;
-          padding: 6px 4px;
-          font-size: 12px;
+          padding: 5px 3px;
+          font-size: 11px;
           font-weight: 600;
-          background: #1a1a1a;
-          color: #666;
-          border: 1px solid #2a2a2a;
+          background: rgba(255, 255, 255, 0.07);
+          color: #888;
+          border: 1px solid rgba(255, 255, 255, 0.1);
           border-radius: 6px;
           cursor: pointer;
           transition: background 0.15s, color 0.15s;
         }
 
         .seg-btn.active {
-          background: #222;
+          background: rgba(255, 255, 255, 0.18);
           color: #f0f0f0;
-          border-color: #444;
+          border-color: rgba(255, 255, 255, 0.3);
         }
 
         .seg-btn:active { opacity: 0.7; }
@@ -467,12 +523,12 @@ export class MeasureView {
     this._saveFeedback   = document.getElementById('save-feedback')
     this._errorMsg       = document.getElementById('error-msg')
 
-    this._jointSideRow = document.getElementById('joint-side-row')
-    this._segJoint     = document.getElementById('seg-joint')
-    this._segSide      = document.getElementById('seg-side')
-    this._positionRow  = document.getElementById('position-row')
-    this._segPosition  = document.getElementById('seg-position')
-    this._angleLabel   = document.getElementById('angle-label')
+    this._selectorDrawer = document.getElementById('selector-drawer')
+    this._handleLabel    = document.getElementById('handle-label')
+    this._segJoint       = document.getElementById('seg-joint')
+    this._segSide        = document.getElementById('seg-side')
+    this._segPosition    = document.getElementById('seg-position')
+    this._angleLabel     = document.getElementById('angle-label')
 
     this.camera.attach(this._video)
     this.overlay.attach(this._overlayCanvas)
@@ -493,6 +549,14 @@ export class MeasureView {
       if (this.recorder.isActive) this._stopRecording()
       this._stopCamera()
       this.onShowHistory()
+    })
+
+    document.getElementById('selector-handle').addEventListener('click', () => this._toggleDrawer())
+
+    this._overlayCanvas.closest('.camera-stack').addEventListener('click', (e) => {
+      if (this._drawerOpen && !e.target.closest('#selector-drawer')) {
+        this._closeDrawer()
+      }
     })
 
     this._segJoint.addEventListener('click', (e) => {
@@ -523,11 +587,11 @@ export class MeasureView {
       this._setStatus('idle', 'Loading AI model…')
       await this.detector.init()
 
-      this._btnStart.style.display        = 'none'
-      this._btnStop.style.display         = 'block'
-      this._activeControls.style.display  = 'flex'
-      this._jointSideRow.style.display    = 'flex'
-      this._updatePositionRow(this._joint)
+      this._btnStart.style.display          = 'none'
+      this._btnStop.style.display           = 'block'
+      this._activeControls.style.display    = 'flex'
+      this._selectorDrawer.style.display    = 'block'
+      this._updatePositionVisibility()
       this._setStatus('running', 'Detecting pose…')
       this._startLoop()
     } catch (err) {
@@ -547,12 +611,12 @@ export class MeasureView {
     this.smoother.reset()
     this.deadZone.reset()
 
-    this._btnStop.style.display         = 'none'
-    this._btnStart.style.display        = 'block'
-    this._btnStart.disabled             = false
-    this._activeControls.style.display  = 'none'
-    this._jointSideRow.style.display    = 'none'
-    this._positionRow.style.display     = 'none'
+    this._btnStop.style.display           = 'none'
+    this._btnStart.style.display          = 'block'
+    this._btnStart.disabled               = false
+    this._activeControls.style.display    = 'none'
+    this._closeDrawer()
+    this._selectorDrawer.style.display    = 'none'
     this._romBar.style.display          = 'none'
     this._calProgress.style.display     = 'none'
     this._angleDisplay.className        = 'angle-display'
@@ -851,7 +915,23 @@ export class MeasureView {
     this._errorMsg.style.display = 'none'
   }
 
-  // ─── Joint / side selection ──────────────────────────────────────────
+  // ─── Drawer ──────────────────────────────────────────────────────────
+
+  _toggleDrawer() {
+    this._drawerOpen ? this._closeDrawer() : this._openDrawer()
+  }
+
+  _openDrawer() {
+    this._drawerOpen = true
+    this._selectorDrawer.classList.add('open')
+  }
+
+  _closeDrawer() {
+    this._drawerOpen = false
+    this._selectorDrawer.classList.remove('open')
+  }
+
+  // ─── Joint / side / position selection ───────────────────────────────
 
   _selectJoint(joint) {
     this._joint = joint
@@ -859,36 +939,13 @@ export class MeasureView {
     this._segJoint.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.joint === joint)
     })
-    this._updatePositionRow(joint)
-    this._updateJointLabel()
+    // Reset to the clinically typical position for each joint
+    const defaultPosition = { knee: 'prone', hip: 'supine' }
+    if (defaultPosition[joint]) this._selectPosition(defaultPosition[joint])
+    this._updateSelectionLabel()
+    this._updatePositionVisibility()
     this.calibration.clear()
     this._updateCalibrationUI()
-  }
-
-  _updatePositionRow(joint) {
-    const config = {
-      knee: ['Prone', 'Supine', 'Seated'],
-      hip:  ['Supine', 'Standing'],
-    }
-    const options = config[joint]
-    if (!options) {
-      this._positionRow.style.display = 'none'
-      this._position = null
-      return
-    }
-    this._segPosition.innerHTML = options
-      .map((label, i) =>
-        `<button class="seg-btn${i === 0 ? ' active' : ''}" data-position="${label.toLowerCase()}">${label}</button>`
-      ).join('')
-    this._position = options[0].toLowerCase()
-    this._positionRow.style.display = 'flex'
-  }
-
-  _selectPosition(position) {
-    this._position = position
-    this._segPosition.querySelectorAll('.seg-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.position === position)
-    })
   }
 
   _selectSide(side) {
@@ -897,14 +954,32 @@ export class MeasureView {
     this._segSide.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.side === side)
     })
-    this._updateJointLabel()
+    this._updateSelectionLabel()
     this.calibration.clear()
     this._updateCalibrationUI()
   }
 
-  _updateJointLabel() {
-    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow' }
-    const side  = this._side.charAt(0).toUpperCase() + this._side.slice(1)
-    this._angleLabel.textContent = `${side} ${names[this._joint]} flexion`
+  _selectPosition(position) {
+    this._position = position
+    this._segPosition.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.position === position)
+    })
+    this._updateSelectionLabel()
+  }
+
+  _updateSelectionLabel() {
+    const jointNames   = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow', ankle: 'Ankle' }
+    const posNames     = { prone: 'Prone', supine: 'Supine', seated: 'Seated' }
+    const side         = this._side.charAt(0).toUpperCase() + this._side.slice(1)
+    const usesPosition = this._joint === 'knee' || this._joint === 'hip'
+    this._angleLabel.textContent  = `${side} ${jointNames[this._joint]} flexion`
+    this._handleLabel.textContent = usesPosition
+      ? `${side} ${jointNames[this._joint]} · ${posNames[this._position]}`
+      : `${side} ${jointNames[this._joint]}`
+  }
+
+  _updatePositionVisibility() {
+    const usesPosition = this._joint === 'knee' || this._joint === 'hip'
+    this._segPosition.style.display = usesPosition ? 'flex' : 'none'
   }
 }
