@@ -527,6 +527,7 @@ export class MeasureView {
       this._btnStop.style.display         = 'block'
       this._activeControls.style.display  = 'flex'
       this._jointSideRow.style.display    = 'flex'
+      this._updatePositionRow(this._joint)
       this._setStatus('running', 'Detecting pose…')
       this._startLoop()
     } catch (err) {
