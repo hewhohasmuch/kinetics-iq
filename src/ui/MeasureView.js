@@ -31,6 +31,7 @@ export class MeasureView {
     this._rafId         = null
     this._joint         = 'knee'
     this._side          = 'right'
+    this._position      = null
 
     this.currentAngle  = null
     this._pendingSession = null  // holds session between stop() and note entry
@@ -80,6 +81,11 @@ export class MeasureView {
             <button class="seg-btn active" data-side="right">Right</button>
             <button class="seg-btn" data-side="left">Left</button>
           </div>
+        </div>
+
+        <!-- Position selector — shown only for knee and hip -->
+        <div id="position-row" class="joint-side-row" style="display:none">
+          <div class="seg-group" id="seg-position"></div>
         </div>
 
         <!-- Live angle readout -->
@@ -464,6 +470,8 @@ export class MeasureView {
     this._jointSideRow = document.getElementById('joint-side-row')
     this._segJoint     = document.getElementById('seg-joint')
     this._segSide      = document.getElementById('seg-side')
+    this._positionRow  = document.getElementById('position-row')
+    this._segPosition  = document.getElementById('seg-position')
     this._angleLabel   = document.getElementById('angle-label')
 
     this.camera.attach(this._video)
@@ -494,6 +502,10 @@ export class MeasureView {
     this._segSide.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-side]')
       if (btn) this._selectSide(btn.dataset.side)
+    })
+    this._segPosition.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-position]')
+      if (btn) this._selectPosition(btn.dataset.position)
     })
   }
 
@@ -539,6 +551,7 @@ export class MeasureView {
     this._btnStart.disabled             = false
     this._activeControls.style.display  = 'none'
     this._jointSideRow.style.display    = 'none'
+    this._positionRow.style.display     = 'none'
     this._romBar.style.display          = 'none'
     this._calProgress.style.display     = 'none'
     this._angleDisplay.className        = 'angle-display'
@@ -602,7 +615,7 @@ export class MeasureView {
   // ─── Recording lifecycle ─────────────────────────────────────────────
 
   _startRecording() {
-    this.recorder.setContext(this._joint, this._side)
+    this.recorder.setContext(this._joint, this._side, this._position)
     this.recorder.start()
     this._peakFrame = null
     this._peakAngle = -Infinity
@@ -845,9 +858,36 @@ export class MeasureView {
     this._segJoint.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.joint === joint)
     })
+    this._updatePositionRow(joint)
     this._updateJointLabel()
     this.calibration.clear()
     this._updateCalibrationUI()
+  }
+
+  _updatePositionRow(joint) {
+    const config = {
+      knee: ['Prone', 'Supine', 'Seated'],
+      hip:  ['Supine', 'Standing'],
+    }
+    const options = config[joint]
+    if (!options) {
+      this._positionRow.style.display = 'none'
+      this._position = null
+      return
+    }
+    this._segPosition.innerHTML = options
+      .map((label, i) =>
+        `<button class="seg-btn${i === 0 ? ' active' : ''}" data-position="${label.toLowerCase()}">${label}</button>`
+      ).join('')
+    this._position = options[0].toLowerCase()
+    this._positionRow.style.display = 'flex'
+  }
+
+  _selectPosition(position) {
+    this._position = position
+    this._segPosition.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.position === position)
+    })
   }
 
   _selectSide(side) {

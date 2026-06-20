@@ -27,12 +27,14 @@ export class SessionRecorder {
     this._active    = false
     this._joint     = 'knee'
     this._side      = 'right'
+    this._position  = null
   }
 
-  // Set the joint and side before start() so they appear in the saved session.
-  setContext(joint, side) {
-    this._joint = joint
-    this._side  = side
+  // Set the joint, side, and position before start() so they appear in the saved session.
+  setContext(joint, side, position = null) {
+    this._joint    = joint
+    this._side     = side
+    this._position = position ?? null
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
@@ -86,6 +88,7 @@ export class SessionRecorder {
       date:          new Date(this._startTime).toISOString().split('T')[0],
       joint:         this._joint,
       side:          this._side,
+      position:      this._position,
       min:           Math.round(min * 10) / 10,
       max:           Math.round(max * 10) / 10,
       rom:           Math.round((max - min) * 10) / 10,

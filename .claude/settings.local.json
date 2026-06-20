@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(gh repo *)"
+      "PowerShell(gh repo *)",
+      "Bash(npx vitest *)",
+      "Bash(npm install *)",
+      "Bash(./node_modules/.bin/vitest run *)",
+      "Bash(git checkout *)"
     ]
   }
 }
