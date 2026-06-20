@@ -183,7 +183,7 @@ export class HistoryView {
       <div class="session-row" data-id="${session.id}">
         <div class="session-info">
           <div class="session-date">${date} <span class="session-time">${time}</span></div>
-          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}</div>
+          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${session.position ? ` · <span class="position-badge">${session.position.charAt(0).toUpperCase() + session.position.slice(1)}</span>` : ''}</div>
           ${session.notes ? `<div class="session-notes">${session.notes}</div>` : ''}
         </div>
         <div class="session-stats">
@@ -363,6 +363,16 @@ export class HistoryView {
           font-size: 12px;
           color: #666;
           margin-top: 2px;
+        }
+
+        .position-badge {
+          display: inline-block;
+          background: rgba(96,165,250,0.15);
+          color: #60a5fa;
+          border-radius: 4px;
+          padding: 0 4px;
+          font-size: 11px;
+          font-weight: 500;
         }
 
         .session-notes {

@@ -54,7 +54,14 @@ export class SessionDetailView {
     // Header date/time and joint label
     document.getElementById('detail-title').textContent =
       `${this._formatDate(s.date)}  ${this._formatTime(s.timestamp)}`
-    document.getElementById('detail-joint').textContent = this._jointLabel(s)
+    const jointEl = document.getElementById('detail-joint')
+    jointEl.textContent = this._jointLabel(s)
+    if (s.position) {
+      const badge = document.createElement('span')
+      badge.className = 'detail-position-badge'
+      badge.textContent = s.position.charAt(0).toUpperCase() + s.position.slice(1)
+      jointEl.appendChild(badge)
+    }
 
     // Notes
     const notesEl = document.getElementById('detail-notes')
@@ -298,6 +305,16 @@ export class SessionDetailView {
           color: #60a5fa;
           margin-top: 2px;
           font-weight: 500;
+        }
+
+        .detail-position-badge {
+          display: inline-block;
+          background: rgba(96,165,250,0.15);
+          border-radius: 4px;
+          padding: 0 5px;
+          font-size: 11px;
+          margin-left: 6px;
+          vertical-align: middle;
         }
 
         .btn-back {
