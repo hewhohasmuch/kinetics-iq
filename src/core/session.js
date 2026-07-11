@@ -20,6 +20,8 @@
  *   135° = significant flexion
  */
 
+import { generateId } from './id.js'
+
 export class SessionRecorder {
   constructor() {
     this._angles    = []      // all angle samples captured this session
@@ -83,7 +85,9 @@ export class SessionRecorder {
     const timeline = this._angles.map(a => Math.round(a * 10) / 10)
 
     return {
-      id:            `sess_${this._startTime}`,
+      // UUID (not sess_<timestamp>) so offline-created sessions upsert
+      // cleanly into the cloud's uuid primary key without id remapping
+      id:            generateId(),
       timestamp:     this._startTime,
       date:          new Date(this._startTime).toISOString().split('T')[0],
       joint:         this._joint,
