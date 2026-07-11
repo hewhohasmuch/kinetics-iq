@@ -77,6 +77,9 @@ export class PoseDetector {
     }
 
     const lmNorm = result.landmarks[0]
+    // Metric 3D landmarks (meters, relative to hip midpoint). May be absent for
+    // a frame — callers fall back to the 2D center when world is undefined.
+    const wlm    = result.worldLandmarks?.[0] ?? null
     const vw     = videoElement.videoWidth
     const vh     = videoElement.videoHeight
     const cfg    = JOINT_CONFIG[this.joint][this.side]
@@ -85,7 +88,7 @@ export class PoseDetector {
     let   allFound = true
 
     for (const role of ['proximal', 'joint', 'distal']) {
-      const resolved = this._resolveLandmark(cfg[role], lmNorm, vw, vh)
+      const resolved = this._resolveLandmark(cfg[role], lmNorm, vw, vh, wlm)
       if (!resolved) {
         allFound = false
         continue
@@ -93,6 +96,7 @@ export class PoseDetector {
       markers[role] = {
         id:         role,
         center:     { x: resolved.x, y: resolved.y },
+        world:      resolved.world,   // { x, y, z } in meters, or undefined
         corners:    [],
         visibility: resolved.visibility,
       }
@@ -107,11 +111,17 @@ export class PoseDetector {
 
   // Resolve a landmark config entry to { x, y, visibility } in video pixel space,
   // or null if below the visibility threshold.
-  _resolveLandmark(cfg, lmNorm, vw, vh) {
+  _resolveLandmark(cfg, lmNorm, vw, vh, wlm = null) {
     if (typeof cfg === 'number') {
       const lm = lmNorm[cfg]
       if (!lm || lm.visibility < MIN_VISIBILITY) return null
-      return { x: lm.x * vw, y: lm.y * vh, visibility: lm.visibility }
+      const w = wlm?.[cfg]
+      return {
+        x:          lm.x * vw,
+        y:          lm.y * vh,
+        visibility: lm.visibility,
+        world:      w ? { x: w.x, y: w.y, z: w.z } : undefined,
+      }
     }
     if (cfg.midpoint) {
       const [a, b] = cfg.midpoint
@@ -120,16 +130,22 @@ export class PoseDetector {
       // Both landmarks must be visible — if the knee is out of frame the
       // midpoint would be unreliable and cause jumping dots
       if (lmA.visibility < MIN_VISIBILITY || lmB.visibility < MIN_VISIBILITY) return null
+      const wA = wlm?.[a], wB = wlm?.[b]
       return {
         x:          ((lmA.x + lmB.x) / 2) * vw,
         y:          ((lmA.y + lmB.y) / 2) * vh,
         visibility: Math.max(lmA.visibility, lmB.visibility),
+        world:      (wA && wB)
+          ? { x: (wA.x + wB.x) / 2, y: (wA.y + wB.y) / 2, z: (wA.z + wB.z) / 2 }
+          : undefined,
       }
     }
     return null
   }
 
   // Drop-in replacement for ArucoDetector.getJointPoints().
+  // Returns 2D { x, y } video-pixel points — used for the overlay and as the
+  // fallback when 3D world data is unavailable.
   getJointPoints(markers) {
     const p = markers['proximal']
     const j = markers['joint']
@@ -139,6 +155,23 @@ export class PoseDetector {
       proximal: p.center,
       joint:    j.center,
       distal:   d.center,
+    }
+  }
+
+  // 3D variant — returns world-space { x, y, z } points in meters so the angle
+  // is computed in real space (immune to camera-perspective foreshortening).
+  // Returns null if any marker lacks world data; the caller then falls back to
+  // the 2D getJointPoints() so a bad frame degrades rather than drops.
+  getJointPoints3D(markers) {
+    const p = markers['proximal']
+    const j = markers['joint']
+    const d = markers['distal']
+    if (!p || !j || !d) return null
+    if (!p.world || !j.world || !d.world) return null
+    return {
+      proximal: p.world,
+      joint:    j.world,
+      distal:   d.world,
     }
   }
 

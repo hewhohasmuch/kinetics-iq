@@ -95,6 +95,7 @@ export class SessionRecorder {
       duration_s:    duration,
       samples:       this._angles.length,
       angleTimeline: timeline,   // full sample array for detail chart
+      angleMode:     '3d',       // measured with 3D world landmarks; older sessions lack this (2D)
       notes:         '',
       app_version:   '0.1.0',
     }

@@ -101,6 +101,56 @@ describe('jointAngle()', () => {
 
 })
 
+// ─── jointAngle() with 3D (z) coordinates ──────────────────────────────────────
+
+describe('jointAngle() with 3D (z) coordinates', () => {
+
+  it('2D regression: points without z behave exactly as before', () => {
+    // Right angle in the xy-plane, no z → must still be 90°
+    const A = { x: 0, y: 0 }
+    const B = { x: 0, y: 100 }
+    const C = { x: 100, y: 100 }
+    expectAngle(jointAngle(A, B, C), 90)
+  })
+
+  it('treats a missing z as 0 (2D and explicit-z-0 agree)', () => {
+    const A2 = { x: 0, y: 0 },       B2 = { x: 0, y: 100 },       C2 = { x: 100, y: 100 }
+    const A3 = { x: 0, y: 0, z: 0 }, B3 = { x: 0, y: 100, z: 0 }, C3 = { x: 100, y: 100, z: 0 }
+    expectAngle(jointAngle(A3, B3, C3), jointAngle(A2, B2, C2))
+  })
+
+  it('returns 90° for a right angle spanning the z axis', () => {
+    // BA points along +z, BC points along +x → perpendicular
+    const A = { x: 0, y: 0, z: 1 }
+    const B = { x: 0, y: 0, z: 0 }
+    const C = { x: 1, y: 0, z: 0 }
+    expectAngle(jointAngle(A, B, C), 90)
+  })
+
+  it('returns 180° for points collinear in 3D space', () => {
+    const A = { x: 0, y: 0, z: 0 }
+    const B = { x: 1, y: 1, z: 1 }
+    const C = { x: 2, y: 2, z: 2 }
+    expectAngle(jointAngle(A, B, C), 180)
+  })
+
+  it('recovers the true angle where the 2D projection is misleading', () => {
+    // A limb bent ~116.6° in real space, but whose camera projection (drop z)
+    // looks like a straight 180° line — the exact foreshortening case 3D fixes.
+    const A = { x: 0, y: 1,  z: 0 }
+    const B = { x: 0, y: 0,  z: 0 }
+    const C = { x: 0, y: -1, z: 2 }
+
+    // True 3D angle = acos(-1/√5) ≈ 116.565°
+    expectAngle(jointAngle(A, B, C), 116.565, 0.01)
+
+    // Same points projected to 2D (z stripped) read as a straight line
+    const strip = p => ({ x: p.x, y: p.y })
+    expectAngle(jointAngle(strip(A), strip(B), strip(C)), 180)
+  })
+
+})
+
 // ─── toFlexionAngle() ──────────────────────────────────────────────────────────
 
 describe('toFlexionAngle()', () => {

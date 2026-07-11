@@ -21,8 +21,10 @@ export class MeasureView {
     this.camera      = new Camera()
     this.detector    = new PoseDetector()
     this.overlay     = new Overlay()
-    this.smoother    = new AngleSmoother(10)
-    this.deadZone    = new DeadZoneFilter(1.5)
+    // Wider window + larger dead zone than the 2D era: the 3D world-landmark
+    // depth (z) axis is noisier, so we trade a little responsiveness for calm.
+    this.smoother    = new AngleSmoother(15)
+    this.deadZone    = new DeadZoneFilter(2.0)
     this.recorder    = new SessionRecorder()
     this.calibration = new CalibrationManager()
 
@@ -784,7 +786,10 @@ export class MeasureView {
     let displayAngle = null
 
     if (allFound) {
-      const points = this.detector.getJointPoints(markers)
+      // Prefer 3D world landmarks (perspective-independent); fall back to the
+      // 2D points if a frame lacks world data so a bad frame degrades, not drops.
+      const points = this.detector.getJointPoints3D(markers)
+                  ?? this.detector.getJointPoints(markers)
       if (points) {
         const interior = jointAngle(points.proximal, points.joint, points.distal)
         if (interior !== null) {

@@ -42,21 +42,28 @@
 export function jointAngle(A, B, C) {
   if (!A || !B || !C) return null
 
+  // Optional z: when points carry a z component (3D world landmarks) the angle
+  // is computed in real space; when they don't (2D pixel points) z is 0 and the
+  // math reduces exactly to the original 2D calculation.
+  const Az = A.z ?? 0, Bz = B.z ?? 0, Cz = C.z ?? 0
+
   // Vectors from B (knee) outward toward A (thigh) and C (shin)
   const BAx = A.x - B.x
   const BAy = A.y - B.y
+  const BAz = Az - Bz
   const BCx = C.x - B.x
   const BCy = C.y - B.y
+  const BCz = Cz - Bz
 
   // Magnitudes (lengths of the limb segments)
-  const magBA = Math.sqrt(BAx * BAx + BAy * BAy)
-  const magBC = Math.sqrt(BCx * BCx + BCy * BCy)
+  const magBA = Math.sqrt(BAx * BAx + BAy * BAy + BAz * BAz)
+  const magBC = Math.sqrt(BCx * BCx + BCy * BCy + BCz * BCz)
 
   // Guard against zero-length vectors (markers stacked on each other)
   if (magBA < 1e-6 || magBC < 1e-6) return null
 
   // Dot product
-  const dot = BAx * BCx + BAy * BCy
+  const dot = BAx * BCx + BAy * BCy + BAz * BCz
 
   // Clamp to [-1, 1] to guard against floating-point errors in acos
   // Without this, values like 1.0000000002 cause acos to return NaN

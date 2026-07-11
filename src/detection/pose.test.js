@@ -31,6 +31,15 @@ function makeLandmarks(overrides = {}) {
   return base
 }
 
+// Build 33 mock world landmarks (meters) at the origin; override by index.
+function makeWorld(overrides = {}) {
+  const base = Array.from({ length: 33 }, () => ({ x: 0, y: 0, z: 0 }))
+  for (const [idx, val] of Object.entries(overrides)) {
+    base[Number(idx)] = { ...base[Number(idx)], ...val }
+  }
+  return base
+}
+
 describe('PoseDetector', () => {
   let detector
 
@@ -114,6 +123,31 @@ describe('PoseDetector', () => {
     expect(result.markers['distal'].center.x).toBeCloseTo(300)
   })
 
+  it('getJointPoints3D returns world coords when worldLandmarks present', async () => {
+    await detector.init()
+    // knee right: proximal=24, joint=26, distal=28
+    const world = makeWorld({
+      24: { x: 0.1, y: 0.2, z: 0.3 },
+      26: { x: 0.4, y: 0.5, z: 0.6 },
+      28: { x: 0.7, y: 0.8, z: 0.9 },
+    })
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks()], worldLandmarks: [world] })
+    const { markers } = detector.detect(makeVideoEl())
+    const pts = detector.getJointPoints3D(markers)
+    expect(pts).not.toBeNull()
+    expect(pts.proximal).toEqual({ x: 0.1, y: 0.2, z: 0.3 })
+    expect(pts.joint).toEqual({ x: 0.4, y: 0.5, z: 0.6 })
+    expect(pts.distal).toEqual({ x: 0.7, y: 0.8, z: 0.9 })
+  })
+
+  it('getJointPoints3D returns null when worldLandmarks absent (2D fallback still works)', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks()] })  // no worldLandmarks
+    const { markers } = detector.detect(makeVideoEl())
+    expect(detector.getJointPoints3D(markers)).toBeNull()
+    expect(detector.getJointPoints(markers)).not.toBeNull()
+  })
+
   it('init() deduplicates concurrent calls', async () => {
     const p1 = detector.init()
     const p2 = detector.init()
@@ -188,5 +222,29 @@ describe('PoseDetector._resolveLandmark (midpoint)', () => {
     // proximal should be midpoint of knee(0.2,0.2) and ankle(0.4,0.6) = (0.3,0.4)
     expect(result.markers['proximal'].center.x).toBeCloseTo(300)
     expect(result.markers['proximal'].center.y).toBeCloseTo(400)
+  })
+
+  it('averages world coords for a midpoint proximal (ankle)', async () => {
+    const detector = new PoseDetector()
+    await detector.init()
+    detector.setJoint('ankle')
+    detector.setSide('right')
+
+    // right ankle: proximal=midpoint(26,28), joint=28, distal=32
+    const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0.95 }))
+    const world = makeWorld({
+      26: { x: 0.2, y: 0.2, z: 0.2 },  // knee
+      28: { x: 0.4, y: 0.6, z: 0.8 },  // ankle (joint)
+      32: { x: 0.9, y: 0.9, z: 0.9 },  // foot index
+    })
+    mockDetectForVideo.mockReturnValue({ landmarks: [lm], worldLandmarks: [world] })
+
+    const { markers } = detector.detect({ videoWidth: 1000, videoHeight: 1000 })
+    const pts = detector.getJointPoints3D(markers)
+    expect(pts).not.toBeNull()
+    // proximal world = midpoint of knee(0.2,0.2,0.2) and ankle(0.4,0.6,0.8) = (0.3,0.4,0.5)
+    expect(pts.proximal.x).toBeCloseTo(0.3)
+    expect(pts.proximal.y).toBeCloseTo(0.4)
+    expect(pts.proximal.z).toBeCloseTo(0.5)
   })
 })

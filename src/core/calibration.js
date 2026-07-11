@@ -32,9 +32,24 @@ import { saveSettings, loadSettings } from './storage.js'
 
 const SAMPLE_COUNT = 20   // frames to average during calibration capture
 
+// Current calibration schema version. The 3D angle switch invalidates any
+// offset captured under the old 2D math, so a stored offset from an older
+// version is discarded once and the user is prompted to re-zero.
+const CALIBRATION_VERSION = 1
+
 export class CalibrationManager {
   constructor() {
-    this._offset        = loadSettings().calibration_offset ?? 0
+    const settings = loadSettings()
+
+    if ((settings.calibration_version ?? 0) < CALIBRATION_VERSION) {
+      // Stale (2D-era) offset — clear it once and record the new version so
+      // this only happens on the first run after the upgrade.
+      this._offset = 0
+      saveSettings({ calibration_offset: 0, calibration_version: CALIBRATION_VERSION })
+    } else {
+      this._offset = settings.calibration_offset ?? 0
+    }
+
     this._sampling      = false
     this._samples       = []
     this._onComplete    = null   // callback(offset) when calibration finishes

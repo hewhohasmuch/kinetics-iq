@@ -100,6 +100,10 @@ export function clearSessions() {
 
 const DEFAULT_SETTINGS = {
   calibration_offset: 0,
+  // Bumped when the angle math changes in a way that invalidates a stored
+  // calibration offset (e.g. the 2D → 3D switch). CalibrationManager clears the
+  // offset once when it sees an older version. Absent/0 = pre-3D (2D era).
+  calibration_version: 0,
   smoothing_window:   5,
   sample_rate_hz:     10,
   marker_ids: {
