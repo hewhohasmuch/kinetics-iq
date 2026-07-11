@@ -7,16 +7,19 @@ import { PoseDetector }      from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
 import { jointAngle, toFlexionAngle, AngleSmoother, DeadZoneFilter } from '../core/angle.js'
 import { SessionRecorder }   from '../core/session.js'
-import { saveSession }       from '../core/storage.js'
+import { saveSession, getActivePatientId, getPatient } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
+import { isConfigured }      from '../core/supabase.js'
+import { getStatus, onSyncStatus } from '../core/sync.js'
 
 const DETECTION_HZ          = 10
 const DETECTION_INTERVAL_MS = 1000 / DETECTION_HZ
 
 export class MeasureView {
-  constructor(container, onShowHistory) {
-    this.container     = container
-    this.onShowHistory = onShowHistory
+  constructor(container, onShowHistory, onShowPatients) {
+    this.container      = container
+    this.onShowHistory  = onShowHistory
+    this.onShowPatients = onShowPatients
 
     this.camera      = new Camera()
     this.detector    = new PoseDetector()
@@ -38,6 +41,7 @@ export class MeasureView {
 
     this.currentAngle  = null
     this._pendingSession = null  // holds session between stop() and note entry
+    this._unsubSync      = null
   }
 
   mount() {
@@ -45,9 +49,18 @@ export class MeasureView {
     this._bindElements()
     this._bindEvents()
     this._updateCalibrationUI()
+    this._updatePatientChip()
+    if (isConfigured()) {
+      this._updateSyncDot(getStatus())
+      this._unsubSync = onSyncStatus((status) => this._updateSyncDot(status))
+    }
   }
 
   unmount() {
+    if (this._unsubSync) {
+      this._unsubSync()
+      this._unsubSync = null
+    }
     this._stopLoop()
     this.camera.stop()
     this.container.innerHTML = ''
@@ -63,6 +76,13 @@ export class MeasureView {
           <video id="rom-video" class="camera-video" playsinline muted autoplay></video>
           <canvas id="rom-overlay" class="camera-overlay"></canvas>
           <div id="status-badge" class="status-badge status-idle">Tap to start</div>
+
+          <!-- Active patient chip + sync indicator -->
+          <button id="patient-chip" class="patient-chip">
+            <span id="sync-dot" class="sync-dot" style="display:none"></span>
+            <span id="patient-chip-label">Select patient</span>
+            <span class="chip-chevron">›</span>
+          </button>
 
           <!-- Calibration sampling progress — shown during 2s capture -->
           <div id="cal-progress" class="cal-progress" style="display:none">
@@ -187,6 +207,43 @@ export class MeasureView {
           font-size: 13px;
           font-weight: 600;
         }
+        .patient-chip {
+          position: absolute;
+          top: 12px; right: 12px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          max-width: 55%;
+          padding: 5px 10px;
+          background: rgba(0,0,0,0.55);
+          border: 1px solid rgba(255,255,255,0.15);
+          border-radius: 14px;
+          color: #f0f0f0;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .patient-chip:active { background: rgba(255,255,255,0.12); }
+        .patient-chip.no-patient { color: #facc15; border-color: rgba(250,204,21,0.4); }
+
+        #patient-chip-label {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .chip-chevron { color: #666; font-size: 14px; line-height: 1; }
+
+        .sync-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          flex-shrink: 0;
+          background: #4ade80;
+        }
+        .sync-dot.pending { background: #facc15; }
+        .sync-dot.offline { background: #666; }
+
         .status-idle      { background: rgba(0,0,0,0.5);       color: #888; }
         .status-running   { background: rgba(74,222,128,0.2);  color: #4ade80; }
         .status-lost      { background: rgba(250,204,21,0.2);  color: #facc15; }
@@ -524,6 +581,9 @@ export class MeasureView {
     this._btnNotesSkip   = document.getElementById('btn-notes-skip')
     this._saveFeedback   = document.getElementById('save-feedback')
     this._errorMsg       = document.getElementById('error-msg')
+    this._patientChip    = document.getElementById('patient-chip')
+    this._patientChipLabel = document.getElementById('patient-chip-label')
+    this._syncDot        = document.getElementById('sync-dot')
 
     this._selectorDrawer = document.getElementById('selector-drawer')
     this._handleLabel    = document.getElementById('handle-label')
@@ -551,6 +611,11 @@ export class MeasureView {
       if (this.recorder.isActive) this._stopRecording()
       this._stopCamera()
       this.onShowHistory()
+    })
+    this._patientChip.addEventListener('click', () => {
+      if (this.recorder.isActive) this._stopRecording()
+      this._stopCamera()
+      this.onShowPatients()
     })
 
     document.getElementById('selector-handle').addEventListener('click', () => this._toggleDrawer())
@@ -682,6 +747,13 @@ export class MeasureView {
   // ─── Recording lifecycle ─────────────────────────────────────────────
 
   _startRecording() {
+    // Recording is blocked (not just saving) so a finished measurement can
+    // never be lost navigating away to pick a patient afterwards.
+    if (!getActivePatientId()) {
+      this._showError('Select a patient before recording — tap the patient chip at the top right.')
+      return
+    }
+    this._hideError()
     this.recorder.setContext(this._joint, this._side, this._position)
     this.recorder.start()
     this._peakFrame = null
@@ -738,6 +810,7 @@ export class MeasureView {
 
     if (!session) return
 
+    session.patient_id = getActivePatientId()
     const saved = saveSession(session)
     if (saved) {
       this._showSaveFeedback('Session saved ✓')
@@ -918,6 +991,28 @@ export class MeasureView {
 
   _hideError() {
     this._errorMsg.style.display = 'none'
+  }
+
+  // ─── Patient chip + sync indicator ───────────────────────────────────
+
+  _updatePatientChip() {
+    const patient = getPatient(getActivePatientId())
+    if (patient) {
+      this._patientChipLabel.textContent = patient.name
+      this._patientChip.classList.remove('no-patient')
+    } else {
+      this._patientChipLabel.textContent = 'Select patient'
+      this._patientChip.classList.add('no-patient')
+    }
+  }
+
+  _updateSyncDot(status) {
+    this._syncDot.style.display = 'inline-block'
+    this._syncDot.className = 'sync-dot' +
+      (status.state === 'pending' ? ' pending' : status.state === 'offline' ? ' offline' : '')
+    this._syncDot.title = status.state === 'pending'
+      ? `${status.pendingCount} change(s) waiting to sync`
+      : status.state
   }
 
   // ─── Drawer ──────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@
  * main.js handles swapping views.
  */
 
-import { loadSessions, deleteSession } from '../core/storage.js'
+import { loadSessions, deleteSession, getActivePatientId, getPatient } from '../core/storage.js'
 import { Chart } from 'chart.js/auto'
 
 export class HistoryView {
@@ -52,13 +52,26 @@ export class HistoryView {
   // ─── Private: render ────────────────────────────────────────────────
 
   _render() {
-    const sessions = loadSessions()   // newest first
+    const sessions = this._loadScopedSessions()   // newest first
+
+    const patient = getPatient(getActivePatientId())
+    if (patient) {
+      document.querySelector('.history-title').textContent = patient.name
+    }
 
     this._renderChart(sessions)
     this._renderList(sessions)
 
     document.getElementById('btn-back')
       .addEventListener('click', () => this.onBack())
+  }
+
+  /**
+   * Sessions scoped to the active patient. With no active patient (local-only
+   * mode, or nothing selected yet) all sessions show, matching old behavior.
+   */
+  _loadScopedSessions() {
+    return loadSessions(getActivePatientId() ?? undefined)
   }
 
   _renderChart(sessions) {
@@ -159,7 +172,7 @@ export class HistoryView {
         // Don't trigger if delete button was tapped
         if (e.target.closest('.btn-delete')) return
         const id      = row.dataset.id
-        const session = loadSessions().find(s => s.id === id)
+        const session = this._loadScopedSessions().find(s => s.id === id)
         if (session && this.onShowDetail) this.onShowDetail(session)
       })
     })
@@ -202,7 +215,7 @@ export class HistoryView {
     if (!confirm('Delete this session?')) return
     deleteSession(id)
     // Re-render the full view with updated data
-    const sessions = loadSessions()
+    const sessions = this._loadScopedSessions()
     this._renderChart(sessions)
     this._renderList(sessions)
   }
