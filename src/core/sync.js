@@ -14,8 +14,8 @@
  * - FAILURES: network errors keep the op for retry; permanent errors
  *   (4xx / RLS rejection) drop the op and log the id only — record
  *   contents never go to the console (PHI hygiene).
- * - peakFrame (large JPEG data URL) is stripped from pushed payloads;
- *   images stay local-only for now.
+ * - peakFrame/minFrame (large JPEG data URLs) are stripped from pushed
+ *   payloads; images stay local-only for now.
  *
  * TRIGGERS: login (initSync), window 'online', tab becoming visible, and
  * every outbox enqueue (via storage.setOutboxListener). No polling.
@@ -201,7 +201,7 @@ export function sessionToRow(s) {
     notes:          s.notes ?? '',
     app_version:    s.app_version ?? null,
     updated_at:     new Date(s.updated_at ?? Date.now()).toISOString(),
-    // peakFrame deliberately omitted — images stay on the device for now
+    // peakFrame/minFrame deliberately omitted — images stay on the device for now
   }
 }
 

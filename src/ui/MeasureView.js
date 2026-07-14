@@ -756,8 +756,10 @@ export class MeasureView {
     this._hideError()
     this.recorder.setContext(this._joint, this._side, this._position)
     this.recorder.start()
-    this._peakFrame = null
-    this._peakAngle = -Infinity
+    this._maxFrame = null
+    this._maxAngle = -Infinity
+    this._minFrame = null
+    this._minAngle = Infinity
     this._btnRecordStart.style.display = 'none'
     this._btnRecordStop.style.display  = 'block'
     this._btnCalibrate.disabled        = true
@@ -781,8 +783,9 @@ export class MeasureView {
       return
     }
 
-    SessionRecorder.attachFrame(session, this._peakFrame)
-    this._peakFrame = null
+    SessionRecorder.attachFrames(session, { maxFrame: this._maxFrame, minFrame: this._minFrame })
+    this._maxFrame = null
+    this._minFrame = null
 
     // Hold the session, show notes panel
     this._pendingSession = session
@@ -887,16 +890,26 @@ export class MeasureView {
     if (this.recorder.isActive) {
       this.recorder.record(displayAngle)
       this._updateRomBar()
-      if (displayAngle !== null && displayAngle > this._peakAngle) {
-        this._peakAngle = displayAngle
-        this._capturePeakFrame()
+      if (displayAngle !== null) {
+        // Snapshot both extremes: max flexion (most bent) and min flexion
+        // (straightest). Extension tests peak at the minimum, not the maximum.
+        if (displayAngle > this._maxAngle) {
+          this._maxAngle = displayAngle
+          this._maxFrame = this._captureFrame() ?? this._maxFrame
+        }
+        if (displayAngle < this._minAngle) {
+          this._minAngle = displayAngle
+          this._minFrame = this._captureFrame() ?? this._minFrame
+        }
       }
     }
 
     // ── Overlay ────────────────────────────────────────────────────
+    // The overlay label must show the same smoothed + calibrated value as
+    // the readout below the camera; it un-inverts internally (180 - x).
     const videoDims = this.camera.getDimensions()
     this.overlay.resize(videoDims.width, videoDims.height)
-    this.overlay.draw(markers, rawFlexion !== null ? 180 - rawFlexion : null, { joint: this._joint })
+    this.overlay.draw(markers, displayAngle !== null ? 180 - displayAngle : null, { joint: this._joint })
 
     // ── UI ─────────────────────────────────────────────────────────
     this._updateAngleDisplay(displayAngle)
@@ -915,11 +928,15 @@ export class MeasureView {
     }
   }
 
-  _capturePeakFrame() {
+  /**
+   * Composite the current video frame + overlay into a JPEG data URL.
+   * Returns null if capture isn't possible (non-critical).
+   */
+  _captureFrame() {
     try {
       const overlayCanvas = this._overlayCanvas
       const videoEl = this.camera.videoEl
-      if (!overlayCanvas || !videoEl) return
+      if (!overlayCanvas || !videoEl) return null
 
       const w = overlayCanvas.width
       const h = overlayCanvas.height
@@ -944,9 +961,10 @@ export class MeasureView {
       // Draw overlay (landmarks + arc) on top
       ctx.drawImage(overlayCanvas, 0, 0)
 
-      this._peakFrame = offscreen.toDataURL('image/jpeg', 0.82)
+      return offscreen.toDataURL('image/jpeg', 0.82)
     } catch (_) {
       // Non-critical — silently skip if capture fails
+      return null
     }
   }
 

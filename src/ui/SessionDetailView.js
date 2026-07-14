@@ -72,12 +72,26 @@ export class SessionDetailView {
       notesEl.style.display  = 'none'
     }
 
-    // Peak frame
-    const frameEl = document.getElementById('detail-peak-frame')
-    if (s.peakFrame && frameEl) {
-      frameEl.querySelector('img').src = s.peakFrame
-      frameEl.querySelector('.peak-frame-caption').textContent = `Peak: ${s.max}°`
-      frameEl.style.display = 'block'
+    // ROM frames — peakFrame = max flexion (most bent), minFrame = max
+    // extension (straightest). Old sessions only have peakFrame.
+    const framesEl = document.getElementById('detail-frames')
+    if (framesEl && (s.peakFrame || s.minFrame)) {
+      const maxFig = document.getElementById('frame-max')
+      const minFig = document.getElementById('frame-min')
+      if (s.peakFrame) {
+        maxFig.querySelector('img').src = s.peakFrame
+        maxFig.querySelector('.peak-frame-caption').textContent = `Peak flexion: ${s.max}°`
+        maxFig.style.display = 'block'
+      }
+      if (s.minFrame) {
+        minFig.querySelector('img').src = s.minFrame
+        minFig.querySelector('.peak-frame-caption').textContent = `Peak extension: ${s.min}°`
+        minFig.style.display = 'block'
+      }
+      if (!s.peakFrame || !s.minFrame) {
+        framesEl.querySelector('.rom-frames').classList.add('single')
+      }
+      framesEl.style.display = 'block'
     }
 
     // Chart
@@ -246,11 +260,19 @@ export class SessionDetailView {
         <!-- Notes -->
         <div id="detail-notes" class="detail-notes"></div>
 
-        <!-- Peak ROM frame -->
-        <div id="detail-peak-frame" class="peak-frame-section" style="display:none">
-          <div class="chart-section-label">Peak ROM frame</div>
-          <img class="peak-frame-img" alt="Peak ROM pose" />
-          <div class="peak-frame-caption"></div>
+        <!-- ROM extreme frames -->
+        <div id="detail-frames" class="peak-frame-section" style="display:none">
+          <div class="chart-section-label">Range of motion frames</div>
+          <div class="rom-frames">
+            <figure id="frame-max" class="rom-frame" style="display:none">
+              <img class="peak-frame-img" alt="Peak flexion pose" />
+              <div class="peak-frame-caption"></div>
+            </figure>
+            <figure id="frame-min" class="rom-frame" style="display:none">
+              <img class="peak-frame-img" alt="Peak extension pose" />
+              <div class="peak-frame-caption"></div>
+            </figure>
+          </div>
         </div>
 
         <!-- Timeline chart -->
@@ -397,9 +419,25 @@ export class SessionDetailView {
           line-height: 1.5;
         }
 
-        /* Peak frame */
+        /* ROM extreme frames */
         .peak-frame-section {
           padding: 16px 16px 0;
+        }
+
+        .rom-frames {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        /* A lone frame (old sessions) spans the full width */
+        .rom-frames.single {
+          grid-template-columns: 1fr;
+        }
+
+        .rom-frame {
+          margin: 0;
+          min-width: 0;
         }
 
         .peak-frame-img {

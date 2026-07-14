@@ -120,9 +120,19 @@ export class SessionRecorder {
     return { ...session, notes: (notes || '').trim().slice(0, 200) }
   }
 
-  static attachFrame(session, frameDataUrl) {
-    if (!session || !frameDataUrl) return session
-    session.peakFrame = frameDataUrl
+  /**
+   * Attach the snapshots taken at both range extremes.
+   * peakFrame keeps its legacy name (max flexion) so old sessions and
+   * existing readers keep working; minFrame is the max-extension pose.
+   *
+   * @param {Session} session
+   * @param {{maxFrame?: string|null, minFrame?: string|null}} frames
+   * @returns {Session} the same session with frames attached
+   */
+  static attachFrames(session, { maxFrame, minFrame } = {}) {
+    if (!session) return session
+    if (maxFrame) session.peakFrame = maxFrame
+    if (minFrame) session.minFrame  = minFrame
     return session
   }
 

@@ -288,3 +288,57 @@ describe('SessionRecorder.attachNotes()', () => {
   })
 
 })
+
+// ─── SessionRecorder.attachFrames ────────────────────────────────────────────
+
+describe('SessionRecorder.attachFrames()', () => {
+
+  function recordedSession() {
+    const recorder = new SessionRecorder()
+    recorder.start()
+    recorder.record(5)
+    recorder.record(60)
+    recorder.record(110)
+    return recorder.stop()
+  }
+
+  it('attaches both extreme frames', () => {
+    const session = recordedSession()
+    const result  = SessionRecorder.attachFrames(session, {
+      maxFrame: 'data:image/jpeg;base64,MAX',
+      minFrame: 'data:image/jpeg;base64,MIN',
+    })
+    expect(result.peakFrame).toBe('data:image/jpeg;base64,MAX')
+    expect(result.minFrame).toBe('data:image/jpeg;base64,MIN')
+  })
+
+  it('attaches only the max frame when min is missing', () => {
+    const session = recordedSession()
+    SessionRecorder.attachFrames(session, { maxFrame: 'data:image/jpeg;base64,MAX', minFrame: null })
+    expect(session.peakFrame).toBe('data:image/jpeg;base64,MAX')
+    expect(session).not.toHaveProperty('minFrame')
+  })
+
+  it('attaches only the min frame when max is missing', () => {
+    const session = recordedSession()
+    SessionRecorder.attachFrames(session, { maxFrame: null, minFrame: 'data:image/jpeg;base64,MIN' })
+    expect(session.minFrame).toBe('data:image/jpeg;base64,MIN')
+    expect(session).not.toHaveProperty('peakFrame')
+  })
+
+  it('leaves the session untouched when no frames are given', () => {
+    const session = recordedSession()
+    SessionRecorder.attachFrames(session, {})
+    expect(session).not.toHaveProperty('peakFrame')
+    expect(session).not.toHaveProperty('minFrame')
+
+    SessionRecorder.attachFrames(session)   // frames argument omitted entirely
+    expect(session).not.toHaveProperty('peakFrame')
+    expect(session).not.toHaveProperty('minFrame')
+  })
+
+  it('returns the session unchanged when session is null', () => {
+    expect(SessionRecorder.attachFrames(null, { maxFrame: 'x' })).toBeNull()
+  })
+
+})
