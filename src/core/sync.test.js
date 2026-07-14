@@ -57,6 +57,7 @@ function makeSession(overrides = {}) {
     angleMode: '3d', notes: 'hi', app_version: '0.1.0',
     updated_at: 1700000001000,
     peakFrame: 'data:image/jpeg;base64,xxxx',
+    minFrame:  'data:image/jpeg;base64,yyyy',
     ...overrides,
   }
 }
@@ -86,7 +87,7 @@ describe('processOutbox', () => {
     expect(storage.removeOp).toHaveBeenCalledWith('op1')
   })
 
-  it('maps camelCase to snake_case and strips peakFrame from the payload', async () => {
+  it('maps camelCase to snake_case and strips frame images from the payload', async () => {
     const session = makeSession()
     let sent = null
     storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'upsert_session', entity_id: session.id }])
@@ -102,6 +103,7 @@ describe('processOutbox', () => {
     expect(sent.angle_mode).toBe('3d')
     expect(sent.updated_at).toBe(new Date(session.updated_at).toISOString())
     expect(sent).not.toHaveProperty('peakFrame')
+    expect(sent).not.toHaveProperty('minFrame')
     expect(sent).not.toHaveProperty('angleTimeline')
     expect(sent).not.toHaveProperty('clinician_id')   // column default fills it
   })

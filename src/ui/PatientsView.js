@@ -13,6 +13,7 @@ import {
   getActivePatientId, setActivePatientId,
 } from '../core/storage.js'
 import { isConfigured, signOut } from '../core/supabase.js'
+import { syncNow, getStatus, onSyncStatus } from '../core/sync.js'
 
 export class PatientsView {
   /**
@@ -25,15 +26,26 @@ export class PatientsView {
     this.onBack            = onBack
     this.onPatientSelected = onPatientSelected
     this._editingId        = null   // patient id being edited, or null for create
+    this._unsubSync        = null
   }
 
   mount() {
     this.container.innerHTML = this._template()
     this._bind()
     this._renderList()
+    if (isConfigured()) {
+      // Right after login this view mounts before the initial cloud pull
+      // finishes — re-render when a sync pass completes so pulled patients
+      // appear without navigating away and back.
+      this._unsubSync = onSyncStatus(() => this._renderList())
+    }
   }
 
   unmount() {
+    if (this._unsubSync) {
+      this._unsubSync()
+      this._unsubSync = null
+    }
     this.container.innerHTML = ''
   }
 
@@ -58,8 +70,21 @@ export class PatientsView {
     const btnSignOut = document.getElementById('btn-signout')
     if (isConfigured()) {
       btnSignOut.addEventListener('click', async () => {
-        if (!confirm('Sign out? Patient data is removed from this device (it stays in your account).')) return
+        if (!confirm('Sign out? Patient data is removed from this device after it has been backed up to your account.')) return
         try {
+          // Sign-out wipes all local data (including the sync outbox), so any
+          // change that hasn't reached the cloud yet would be lost forever.
+          // Drain the outbox first and refuse to sign out while ops remain.
+          await syncNow()
+          const { pendingCount } = getStatus()
+          if (pendingCount > 0) {
+            alert(
+              `${pendingCount} change${pendingCount === 1 ? ' hasn’t' : 's haven’t'} ` +
+              'been backed up to your account yet. Check your connection and try again — ' +
+              'signing out now would lose this data.'
+            )
+            return
+          }
           await signOut()
           // main.js listens for SIGNED_OUT: wipes local data, shows login
         } catch (err) {
