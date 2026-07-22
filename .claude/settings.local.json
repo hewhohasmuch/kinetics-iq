@@ -5,7 +5,9 @@
       "Bash(npx vitest *)",
       "Bash(npm install *)",
       "Bash(./node_modules/.bin/vitest run *)",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(npm uninstall *)",
+      "Bash(npm test *)"
     ]
   }
 }
