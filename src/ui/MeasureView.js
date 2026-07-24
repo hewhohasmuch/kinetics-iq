@@ -5,7 +5,7 @@
 import { Camera }            from '../detection/camera.js'
 import { PoseDetector }      from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
-import { jointAngle, toFlexionAngle, AngleSmoother, DeadZoneFilter } from '../core/angle.js'
+import { jointAngle, toFlexionAngle, MedianFilter3, OneEuroFilter } from '../core/angle.js'
 import { SessionRecorder }   from '../core/session.js'
 import { saveSession, getActivePatientId, getPatient } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
@@ -24,10 +24,11 @@ export class MeasureView {
     this.camera      = new Camera()
     this.detector    = new PoseDetector()
     this.overlay     = new Overlay()
-    // Wider window + larger dead zone than the 2D era: the 3D world-landmark
-    // depth (z) axis is noisier, so we trade a little responsiveness for calm.
-    this.smoother    = new AngleSmoother(15)
-    this.deadZone    = new DeadZoneFilter(2.0)
+    // Median rejects single-frame landmark glitches; One Euro then smooths
+    // adaptively — calm while the joint is still, responsive while it moves,
+    // so end-range peaks survive instead of being averaged away.
+    this.median      = new MedianFilter3()
+    this.euro        = new OneEuroFilter()
     this.recorder    = new SessionRecorder()
     this.calibration = new CalibrationManager()
 
@@ -675,8 +676,8 @@ export class MeasureView {
     this._stopLoop()
     this.camera.stop()
     this.overlay.clear()
-    this.smoother.reset()
-    this.deadZone.reset()
+    this.median.reset()
+    this.euro.reset()
 
     this._btnStop.style.display           = 'none'
     this._btnStart.style.display          = 'block'
@@ -756,10 +757,10 @@ export class MeasureView {
     this._hideError()
     this.recorder.setContext(this._joint, this._side, this._position)
     this.recorder.start()
-    this._maxFrame = null
-    this._maxAngle = -Infinity
-    this._minFrame = null
-    this._minAngle = Infinity
+    this._maxAngle    = -Infinity
+    this._minAngle    = Infinity
+    this._maxHasFrame = false
+    this._minHasFrame = false
     this._btnRecordStart.style.display = 'none'
     this._btnRecordStop.style.display  = 'block'
     this._btnCalibrate.disabled        = true
@@ -783,9 +784,13 @@ export class MeasureView {
       return
     }
 
-    SessionRecorder.attachFrames(session, { maxFrame: this._maxFrame, minFrame: this._minFrame })
-    this._maxFrame = null
-    this._minFrame = null
+    // Encode once here rather than on every new extreme during the sweep.
+    SessionRecorder.attachFrames(session, {
+      maxFrame: this._maxHasFrame ? this._encodeCapture('max') : null,
+      minFrame: this._minHasFrame ? this._encodeCapture('min') : null,
+    })
+    this._maxHasFrame = false
+    this._minHasFrame = false
 
     // Hold the session, show notes panel
     this._pendingSession = session
@@ -874,9 +879,12 @@ export class MeasureView {
       }
     }
 
-    // Smooth → dead zone → calibrate
-    smoothAngle  = this.smoother.push(rawFlexion)
-    smoothAngle  = this.deadZone.push(smoothAngle)
+    // Median (spike rejection) → One Euro (adaptive smoothing) → calibrate.
+    // This produces the ONE value used for the readout, the overlay, the peak
+    // snapshot and the recorder — they must never disagree, or the patient
+    // record ends up holding two different numbers for the same measurement.
+    smoothAngle  = this.median.push(rawFlexion)
+    smoothAngle  = this.euro.push(smoothAngle, performance.now())
     displayAngle = this.calibration.apply(smoothAngle)
     this.currentAngle = displayAngle
 
@@ -894,12 +902,12 @@ export class MeasureView {
         // Snapshot both extremes: max flexion (most bent) and min flexion
         // (straightest). Extension tests peak at the minimum, not the maximum.
         if (displayAngle > this._maxAngle) {
-          this._maxAngle = displayAngle
-          this._maxFrame = this._captureFrame() ?? this._maxFrame
+          this._maxAngle    = displayAngle
+          this._maxHasFrame = this._captureFrameTo('max') || this._maxHasFrame
         }
         if (displayAngle < this._minAngle) {
-          this._minAngle = displayAngle
-          this._minFrame = this._captureFrame() ?? this._minFrame
+          this._minAngle    = displayAngle
+          this._minHasFrame = this._captureFrameTo('min') || this._minHasFrame
         }
       }
     }
@@ -929,18 +937,28 @@ export class MeasureView {
   }
 
   /**
-   * Composite the current video frame + overlay into a JPEG data URL.
-   * Returns null if capture isn't possible (non-critical).
+   * Composite the current video frame + overlay into the retained canvas for
+   * `which` ('max' or 'min'), overwriting whatever extreme was held before.
+   *
+   * Only the pixels are kept here — JPEG encoding happens once at stop().
+   * A sweep produces many successive new extremes, and encoding each one
+   * would stall the detection loop for no benefit since all but the last
+   * are discarded.
+   *
+   * @param {'max'|'min'} which
+   * @returns {boolean} whether a frame was captured (non-critical if not)
    */
-  _captureFrame() {
+  _captureFrameTo(which) {
     try {
       const overlayCanvas = this._overlayCanvas
       const videoEl = this.camera.videoEl
-      if (!overlayCanvas || !videoEl) return null
+      if (!overlayCanvas || !videoEl) return false
 
       const w = overlayCanvas.width
       const h = overlayCanvas.height
-      const offscreen = document.createElement('canvas')
+      const key = which === 'max' ? '_maxCanvas' : '_minCanvas'
+      if (!this[key]) this[key] = document.createElement('canvas')
+      const offscreen = this[key]
       offscreen.width  = w
       offscreen.height = h
       const ctx = offscreen.getContext('2d')
@@ -961,9 +979,23 @@ export class MeasureView {
       // Draw overlay (landmarks + arc) on top
       ctx.drawImage(overlayCanvas, 0, 0)
 
-      return offscreen.toDataURL('image/jpeg', 0.82)
+      return true
     } catch (_) {
       // Non-critical — silently skip if capture fails
+      return false
+    }
+  }
+
+  /**
+   * Encode a retained extreme-frame canvas to a JPEG data URL.
+   * @param {'max'|'min'} which
+   * @returns {string|null}
+   */
+  _encodeCapture(which) {
+    try {
+      const canvas = which === 'max' ? this._maxCanvas : this._minCanvas
+      return canvas ? canvas.toDataURL('image/jpeg', 0.82) : null
+    } catch (_) {
       return null
     }
   }
