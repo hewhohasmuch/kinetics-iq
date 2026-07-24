@@ -898,18 +898,6 @@ export class MeasureView {
     if (this.recorder.isActive) {
       this.recorder.record(displayAngle)
       this._updateRomBar()
-      if (displayAngle !== null) {
-        // Snapshot both extremes: max flexion (most bent) and min flexion
-        // (straightest). Extension tests peak at the minimum, not the maximum.
-        if (displayAngle > this._maxAngle) {
-          this._maxAngle    = displayAngle
-          this._maxHasFrame = this._captureFrameTo('max') || this._maxHasFrame
-        }
-        if (displayAngle < this._minAngle) {
-          this._minAngle    = displayAngle
-          this._minHasFrame = this._captureFrameTo('min') || this._minHasFrame
-        }
-      }
     }
 
     // ── Overlay ────────────────────────────────────────────────────
@@ -918,6 +906,24 @@ export class MeasureView {
     const videoDims = this.camera.getDimensions()
     this.overlay.resize(videoDims.width, videoDims.height)
     this.overlay.draw(markers, displayAngle !== null ? 180 - displayAngle : null, { joint: this._joint })
+
+    // ── Extreme snapshots ──────────────────────────────────────────
+    // Must come AFTER overlay.draw() for this frame. The snapshot composites
+    // the overlay canvas, so capturing before the draw burns in the PREVIOUS
+    // frame's angle — which put a number from the opposite end of the range
+    // onto the peak-extension image.
+    if (this.recorder.isActive && displayAngle !== null) {
+      // Snapshot both extremes: max flexion (most bent) and min flexion
+      // (straightest). Extension tests peak at the minimum, not the maximum.
+      if (displayAngle > this._maxAngle) {
+        this._maxAngle    = displayAngle
+        this._maxHasFrame = this._captureFrameTo('max') || this._maxHasFrame
+      }
+      if (displayAngle < this._minAngle) {
+        this._minAngle    = displayAngle
+        this._minHasFrame = this._captureFrameTo('min') || this._minHasFrame
+      }
+    }
 
     // ── UI ─────────────────────────────────────────────────────────
     this._updateAngleDisplay(displayAngle)
