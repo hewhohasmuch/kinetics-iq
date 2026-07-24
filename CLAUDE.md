@@ -45,13 +45,22 @@ PoseDetector.detect(videoElement)   [MediaPipe BlazePose Full, CDN-loaded]
   → getJointPoints3D(markers) ?? getJointPoints(markers)  [prefer 3D world-space landmarks; fall back to 2D pixel points if any marker lacks world data]
   → jointAngle(proximal, joint, distal)  [interior angle at selected joint in degrees; uses x/y/z when present, reduces to 2D math otherwise]
   → toFlexionAngle()              [180 - interior = clinical flexion: 0° = straight]
-  → AngleSmoother.push()          [moving average window, default 10 frames]
-  → DeadZoneFilter.push()         [suppress flicker < 1.5° change]
+  → MedianFilter3.push()          [median of last 3 — rejects single-frame landmark glitches]
+  → OneEuroFilter.push(v, t)      [adaptive smoothing: calm at rest, responsive when moving]
   → CalibrationManager.apply()    [subtract offset captured at "zero" position]
   → SessionRecorder.record()      [accumulate during active recording]
 ```
 
 3D world landmarks (meters, relative to the hip midpoint) make the angle immune to camera-perspective foreshortening. Because the 3D switch changes the math, `CalibrationManager` tracks a `calibration_version` in settings and discards a stale (2D-era) offset once on upgrade, prompting the user to re-zero.
+
+**One value, everywhere.** The output of this chain feeds the big readout, the overlay label, the peak/min snapshots *and* `SessionRecorder` — deliberately the same number, not parallel streams. `_captureFrameTo()` composites the overlay canvas into the saved JPEG, so a divergence would put two contradicting angles inside one patient record with the wrong one burned into the image. Two consequences for anyone changing `_runDetection()`:
+
+- Snapshot capture **must** run after `overlay.draw()` for the current frame. Capturing earlier composites the *previous* frame's label, which at the range extremes means a number from the opposite end of the range.
+- Don't reintroduce a display-only filter (the old `DeadZoneFilter` was one). Stabilise the *rendering* — rounding, hysteresis on the text — never the value.
+
+**Why these filters.** The chain used to be `AngleSmoother(15)` → `DeadZoneFilter(2.0)`: a 1.5s trailing average with ~0.7s of lag, whose output was recorded. At a movement turnaround the window still held 0.7s of shallower angles, clipping 10–15° off the peak of a dynamic sweep, and the dead zone silently cost up to 2° more. A fixed window can't win — widening it calms the readout and worsens the clipping. One Euro varies its cutoff with speed instead, and takes `dt` per sample so a variable frame rate doesn't quietly change its time constant. `AngleSmoother` and `DeadZoneFilter` still exist in `angle.js`, used only by the regression test that pins the old clipping behaviour.
+
+`OneEuroFilter`'s `minCutoff` (default 1.0Hz) is the knob if the readout feels twitchy on-device; lower is calmer. `beta` barely affects peak recovery — at 10Hz the residual on a very fast sweep is the sample rate, not the filter, since the apex spans about one sample and the median rounds it off.
 
 ### MediaPipe Pose loading (`src/detection/pose.js`)
 
@@ -96,7 +105,7 @@ The only module that touches `localStorage`. Local-first: localStorage is the so
 
 Keys: `rom_sessions` (Session[]), `rom_settings` (Settings), `rom_patients` (Patient[], cache of the cloud table), `rom_outbox` (pending sync ops, oldest first).
 
-Sessions have separate `joint` (knee/hip/shoulder/elbow/ankle) and `side` (left/right) fields, plus `position` (prone/supine/seated) and `angleMode` ('3d', absent = pre-3D/2D-era). Old sessions saved before the joint/side split had `joint: 'knee_right'` (combined) and no `side` field — the UI handles both shapes gracefully. Sessions belong to a `patient_id`; `getActivePatientId()`/`setActivePatientId()` in settings track which patient Measure/History currently operate on (switching patient also clears the calibration offset, same rule as switching joint/side).
+Sessions have separate `joint` (knee/hip/shoulder/elbow/ankle) and `side` (left/right) fields, plus `position` (prone/supine/seated), `angleMode` ('3d', absent = pre-3D/2D-era) and `angleFilter` ('euro1', absent = pre-fix). Old sessions saved before the joint/side split had `joint: 'knee_right'` (combined) and no `side` field — the UI handles both shapes gracefully. **Sessions without `angleFilter` read systematically low at the extremes** (the old moving average clipped peaks), so their `rom` is not comparable with a `'euro1'` session's — the difference would look like patient progress but is the filter change. Stamp a new value on this field for any future change that alters the measured numbers. Sessions belong to a `patient_id`; `getActivePatientId()`/`setActivePatientId()` in settings track which patient Measure/History currently operate on (switching patient also clears the calibration offset, same rule as switching joint/side).
 
 ### Separation of concerns
 
@@ -105,3 +114,7 @@ Sessions have separate `joint` (knee/hip/shoulder/elbow/ankle) and `side` (left/
 ### Testing notes
 
 `calibration.test.js` mocks `./storage.js` with `vi.mock()` and provides a `global.localStorage` stub. `pose.test.js` mocks `@mediapipe/tasks-vision` using `vi.hoisted()` (required because `vi.mock` is hoisted before variable declarations). `storage.test.js` and `sync.test.js` cover the outbox/merge logic with a `global.localStorage` stub and a mocked `supabase.js` client respectively.
+
+`angle.test.js` ends with a filter regression suite built on a synthetic cosine sweep (a triangle wave would be unfair to any median — its apex is a single sample, indistinguishable from a spike; a real turnaround dwells near the peak because the limb decelerates). It asserts both directions of the trade-off: the peak is recovered to within ~1°, *and* a stationary joint stays under 0.5° of jitter. Keep both — either alone can be satisfied by tuning the filter into uselessness. The old chain's clipping has its own test so the bug can't quietly return.
+
+Note the untested surface: `src/ui/` has no unit tests, so the wiring in `MeasureView._runDetection()` — the order of overlay draw vs snapshot capture, which value reaches the recorder — is only covered end-to-end. Verify changes there by running the app, not by reasoning about the diff.
