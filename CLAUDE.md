@@ -9,6 +9,7 @@ npm run dev          # start dev server (HTTPS + LAN-accessible, required for ca
 npm run dev:https    # alias — same as dev
 npm run build        # vite build
 npm test             # run Vitest unit tests (Node environment, no browser needed)
+npm run verify:e2e   # drive the real app in Chromium against a fake camera (few minutes)
 ```
 
 Run a single test file:
@@ -18,7 +19,9 @@ npx vitest run src/core/angle.test.js
 
 To run the app in cloud mode locally, copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`. Without those set, the app runs local-only (no login, no sync) — see Accounts & cloud sync below.
 
-For driving the app end-to-end in a headless/scripted environment (fake camera, mock Supabase, key element ids), see the `verify` skill (`.claude/skills/verify/SKILL.md`).
+`npm run verify:e2e` covers the part unit tests can't reach — camera start, MediaPipe detection, the overlay canvas, snapshot compositing, and what actually lands in localStorage. It builds a fake-camera y4m from a real pose photo (mirrored halfway through so the measured angle moves) and asserts, among other things, that the saved min/max are values the readout actually displayed. See `scripts/e2e/README.md`; add `--headed` to watch it. Headless Chromium runs BlazePose on CPU at ~2Hz rather than the app's 10Hz, so anything sensitive to the real frame rate still needs a device check.
+
+For scripted scenarios the harness doesn't cover — cloud mode with a mock Supabase, login flows, other element ids — see the `verify` skill (`.claude/skills/verify/SKILL.md`).
 
 ## Architecture
 
