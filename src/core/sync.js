@@ -21,13 +21,16 @@
  * every outbox enqueue (via storage.setOutboxListener). No polling.
  */
 
-import { getClient } from './supabase.js'
+import { getClient, getUserId } from './supabase.js'
 import { isUuid } from './id.js'
 import {
   loadOutbox, removeOp, setOutboxListener,
-  loadSessions, getPatient,
+  loadSessions, getPatient, setSessionFramePath, enqueueOp,
   mergeRemotePatients, mergeRemoteSessions,
 } from './storage.js'
+import * as imageStore from './imageStore.js'
+
+const IMAGE_BUCKET = 'session-images'
 
 let _running   = false
 let _queued    = false   // a trigger fired while a sync was in flight
@@ -116,8 +119,10 @@ export async function processOutbox() {
   const ops = loadOutbox()   // oldest first
   for (const op of ops) {
     // Legacy pre-sync ids (sess_<ts>) can't live in a uuid column — those
-    // records stay local-only.
-    if (!isUuid(op.entity_id)) { removeOp(op.id); continue }
+    // records stay local-only. For upload_image the entity_id is
+    // `${sessionId}:${which}`, so validate the sessionId portion.
+    const entityUuid = op.type === 'upload_image' ? op.entity_id.split(':')[0] : op.entity_id
+    if (!isUuid(entityUuid)) { removeOp(op.id); continue }
 
     const { error, missing } = await _pushOp(op)
 
@@ -142,8 +147,38 @@ async function _pushOp(op) {
       return { error }
     }
     case 'delete_session': {
+      // PHI hygiene: remove the row AND any cloud snapshots for it. Removing
+      // absent objects is a no-op, so this is safe for sessions that never
+      // had images.
+      const userId = await getUserId()
+      if (userId) {
+        await client.storage.from(IMAGE_BUCKET).remove([
+          `${userId}/${op.entity_id}/peak.jpg`,
+          `${userId}/${op.entity_id}/min.jpg`,
+        ])
+      }
       const { error } = await client.from('sessions').delete().eq('id', op.entity_id)
       return { error }
+    }
+    case 'upload_image': {
+      const [sessionId, which] = op.entity_id.split(':')
+      const blob = await imageStore.getImage(sessionId, which)
+      if (!blob) return { missing: true }   // evicted or session deleted since queueing
+      const userId = await getUserId()
+      // No cached session (rare — shouldn't drain while signed out). Keep the op.
+      if (!userId) return { error: { message: 'no auth session', retry: true } }
+      const path = `${userId}/${sessionId}/${which}.jpg`
+      const { error } = await client.storage
+        .from(IMAGE_BUCKET)
+        .upload(path, blob, { upsert: true, contentType: 'image/jpeg' })
+      if (error) return { error }
+      // Record the path locally, mark the blob backed-up (now evictable), and
+      // queue a session upsert so the path column reaches the DB.
+      setSessionFramePath(sessionId, which, path)
+      await imageStore.markUploaded(sessionId, which)
+      enqueueOp({ type: 'upsert_session', entity_id: sessionId })
+      await imageStore.enforceBudget()
+      return { error: null }
     }
     case 'upsert_patient': {
       const patient = getPatient(op.entity_id)
@@ -160,6 +195,7 @@ function _isRetryable(error) {
   // supabase-js surfaces network failures as fetch TypeErrors without a
   // PostgREST code; anything with a code reached the server and won't
   // succeed on retry.
+  if (error.retry) return true   // explicit transient signal (e.g. no cached session yet)
   if (!_isOnline()) return true
   return !error.code && /fetch|network|load failed/i.test(error.message ?? '')
 }
@@ -200,8 +236,11 @@ export function sessionToRow(s) {
     angle_mode:     s.angleMode ?? null,
     notes:          s.notes ?? '',
     app_version:    s.app_version ?? null,
+    peak_frame_path: s.peakFramePath ?? null,
+    min_frame_path:  s.minFramePath ?? null,
     updated_at:     new Date(s.updated_at ?? Date.now()).toISOString(),
-    // peakFrame/minFrame deliberately omitted — images stay on the device for now
+    // Image BYTES are never sent here — the blobs live in imageStore/IndexedDB
+    // and upload_image ops push them straight to Storage; only the paths sync.
   }
 }
 
@@ -223,6 +262,8 @@ export function rowToSession(row) {
     angleMode:     row.angle_mode ?? undefined,
     notes:         row.notes ?? '',
     app_version:   row.app_version ?? undefined,
+    peakFramePath: row.peak_frame_path ?? null,
+    minFramePath:  row.min_frame_path ?? null,
     updated_at:    Date.parse(row.updated_at) || 0,
   }
 }

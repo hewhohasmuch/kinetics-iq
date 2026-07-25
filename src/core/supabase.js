@@ -53,6 +53,17 @@ export async function getSession() {
   return data?.session ?? null
 }
 
+/**
+ * The signed-in clinician's user id, or null when signed out. Used to build
+ * per-owner Storage paths (`${userId}/${sessionId}/${which}.jpg`). Resolves
+ * from the cached session, so it works offline.
+ * @returns {Promise<string|null>}
+ */
+export async function getUserId() {
+  const session = await getSession()
+  return session?.user?.id ?? null
+}
+
 export async function signIn(email, password) {
   const { data, error } = await getClient().auth.signInWithPassword({ email, password })
   if (error) throw error

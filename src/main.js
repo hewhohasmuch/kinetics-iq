@@ -23,7 +23,7 @@ import { LoginView }         from './ui/LoginView.js'
 import { PatientsView }      from './ui/PatientsView.js'
 import { isConfigured, getSession, onAuthChange } from './core/supabase.js'
 import { initSync }          from './core/sync.js'
-import { loadPatients, clearAllLocalData } from './core/storage.js'
+import { loadPatients, clearAllLocalData, migrateInlineImages } from './core/storage.js'
 
 const app = document.getElementById('app')
 let currentView = null
@@ -64,6 +64,10 @@ function showDetail(session) {
 
 function enterApp() {
   if (isConfigured()) initSync()
+  // One-time rescue: convert any pre-IndexedDB inline snapshot data URLs to
+  // blobs + queue their upload, freeing localStorage. Fire-and-forget — its
+  // outbox enqueues trigger a sync via the outbox listener initSync installed.
+  migrateInlineImages()
   // First run after login: no patients cached yet — start at the roster
   if (loadPatients().length === 0) {
     showPatients()

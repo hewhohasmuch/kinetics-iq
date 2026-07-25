@@ -7,13 +7,21 @@ import { PoseDetector }      from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
 import { jointAngle, toFlexionAngle, MedianFilter3, OneEuroFilter } from '../core/angle.js'
 import { SessionRecorder }   from '../core/session.js'
-import { saveSession, getActivePatientId, getPatient } from '../core/storage.js'
+import { saveSession, getActivePatientId, getPatient, enqueueImageUpload } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
 import { isConfigured }      from '../core/supabase.js'
 import { getStatus, onSyncStatus } from '../core/sync.js'
+import { putImage, usage, BUDGET_BYTES } from '../core/imageStore.js'
 
 const DETECTION_HZ          = 10
 const DETECTION_INTERVAL_MS = 1000 / DETECTION_HZ
+
+// Snapshot encoding. Capture retains full retina-density pixels during the
+// sweep; we downscale ONLY at encode time. Dimension is the primary lever —
+// it shrinks the file without the JPEG ringing that low quality inflicts on
+// the overlay's thin lines and angle text. ~1 MB retina JPEG → ~120-180 KB.
+const SNAPSHOT_MAX_EDGE = 1100   // px, longest edge
+const SNAPSHOT_QUALITY  = 0.78
 
 export class MeasureView {
   constructor(container, onShowHistory, onShowPatients) {
@@ -51,9 +59,13 @@ export class MeasureView {
     this._bindEvents()
     this._updateCalibrationUI()
     this._updatePatientChip()
+    this._updateStorageGauge()
     if (isConfigured()) {
       this._updateSyncDot(getStatus())
-      this._unsubSync = onSyncStatus((status) => this._updateSyncDot(status))
+      this._unsubSync = onSyncStatus((status) => {
+        this._updateSyncDot(status)
+        this._updateStorageGauge()
+      })
     }
   }
 
@@ -165,6 +177,13 @@ export class MeasureView {
         <div id="save-feedback" class="save-feedback" style="display:none">Session saved ✓</div>
         <div id="error-msg"     class="error-msg"     style="display:none"></div>
 
+        <!-- Local snapshot-cache gauge: fills as IndexedDB fills; shows how many
+             images still await cloud upload. Amber ≥80%, red ≥95% of budget. -->
+        <div id="storage-gauge" class="storage-gauge" style="display:none">
+          <div class="gauge-track"><div id="gauge-fill" class="gauge-fill"></div></div>
+          <span id="gauge-label" class="gauge-label"></span>
+        </div>
+
       </div>
 
       <style>
@@ -244,6 +263,36 @@ export class MeasureView {
         }
         .sync-dot.pending { background: #facc15; }
         .sync-dot.offline { background: #666; }
+
+        .storage-gauge {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 6px 12px 0;
+        }
+        .gauge-track {
+          flex: 1;
+          height: 4px;
+          border-radius: 2px;
+          background: #2a2a2a;
+          overflow: hidden;
+        }
+        .gauge-fill {
+          height: 100%;
+          width: 0%;
+          background: #4ade80;
+          transition: width 0.3s ease, background 0.3s ease;
+        }
+        .storage-gauge.warn .gauge-fill { background: #facc15; }
+        .storage-gauge.crit .gauge-fill { background: #f87171; }
+        .gauge-label {
+          color: #888;
+          font-size: 11px;
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+        .storage-gauge.warn .gauge-label { color: #facc15; }
+        .storage-gauge.crit .gauge-label { color: #f87171; }
 
         .status-idle      { background: rgba(0,0,0,0.5);       color: #888; }
         .status-running   { background: rgba(74,222,128,0.2);  color: #4ade80; }
@@ -585,6 +634,9 @@ export class MeasureView {
     this._patientChip    = document.getElementById('patient-chip')
     this._patientChipLabel = document.getElementById('patient-chip-label')
     this._syncDot        = document.getElementById('sync-dot')
+    this._storageGauge   = document.getElementById('storage-gauge')
+    this._gaugeFill      = document.getElementById('gauge-fill')
+    this._gaugeLabel     = document.getElementById('gauge-label')
 
     this._selectorDrawer = document.getElementById('selector-drawer')
     this._handleLabel    = document.getElementById('handle-label')
@@ -784,15 +836,9 @@ export class MeasureView {
       return
     }
 
-    // Encode once here rather than on every new extreme during the sweep.
-    SessionRecorder.attachFrames(session, {
-      maxFrame: this._maxHasFrame ? this._encodeCapture('max') : null,
-      minFrame: this._minHasFrame ? this._encodeCapture('min') : null,
-    })
-    this._maxHasFrame = false
-    this._minHasFrame = false
-
-    // Hold the session, show notes panel
+    // Hold the session (with its retained extreme-frame canvases) until the
+    // note is entered; frames are encoded + stored in _saveWithNote so the
+    // session exists in storage before its image-upload ops are queued.
     this._pendingSession = session
     this._showNotesPanel()
   }
@@ -810,7 +856,7 @@ export class MeasureView {
     this._notesInput.blur()
   }
 
-  _saveWithNote(forceNote) {
+  async _saveWithNote(forceNote) {
     const note    = forceNote !== undefined ? forceNote : this._notesInput.value
     const session = SessionRecorder.attachNotes(this._pendingSession, note)
     this._pendingSession = null
@@ -821,9 +867,40 @@ export class MeasureView {
     session.patient_id = getActivePatientId()
     const saved = saveSession(session)
     if (saved) {
+      // Persist snapshot blobs to IndexedDB and queue them for cloud upload.
+      // The session numbers are already saved — image persistence is best-effort
+      // and must not turn a successful measurement into a failure.
+      await this._persistFrames(session.id)
       this._showSaveFeedback('Session saved ✓')
+      this._updateStorageGauge()
     } else {
       this._showError('Could not save — storage may be full.')
+    }
+    this._maxHasFrame = false
+    this._minHasFrame = false
+  }
+
+  /**
+   * Encode both retained extreme-frame canvases to lightweight JPEG blobs,
+   * store them in imageStore (IndexedDB), and enqueue a cloud upload for each.
+   * @param {string} sessionId
+   */
+  async _persistFrames(sessionId) {
+    // Canvas key ('max'/'min') → image key ('peak'/'min'). peakFrame is the
+    // max-flexion pose, keeping the legacy naming from the session record.
+    for (const [canvasWhich, imageWhich, has] of [
+      ['max', 'peak', this._maxHasFrame],
+      ['min', 'min',  this._minHasFrame],
+    ]) {
+      if (!has) continue
+      try {
+        const blob = await this._encodeCapture(canvasWhich)
+        if (blob && await putImage(sessionId, imageWhich, blob)) {
+          enqueueImageUpload(sessionId, imageWhich)
+        }
+      } catch (e) {
+        console.error(`Failed to persist ${imageWhich} frame:`, e)
+      }
     }
   }
 
@@ -993,17 +1070,34 @@ export class MeasureView {
   }
 
   /**
-   * Encode a retained extreme-frame canvas to a JPEG data URL.
+   * Encode a retained extreme-frame canvas to a lightweight JPEG Blob,
+   * downscaling so the longest edge is ≤ SNAPSHOT_MAX_EDGE. Async because
+   * `toBlob` is — and a Blob is ~33% smaller than the old base64 data URL.
+   *
    * @param {'max'|'min'} which
-   * @returns {string|null}
+   * @returns {Promise<Blob|null>}
    */
   _encodeCapture(which) {
-    try {
-      const canvas = which === 'max' ? this._maxCanvas : this._minCanvas
-      return canvas ? canvas.toDataURL('image/jpeg', 0.82) : null
-    } catch (_) {
-      return null
-    }
+    return new Promise((resolve) => {
+      try {
+        const src = which === 'max' ? this._maxCanvas : this._minCanvas
+        if (!src || !src.width || !src.height) return resolve(null)
+
+        const longest = Math.max(src.width, src.height)
+        const scale   = Math.min(1, SNAPSHOT_MAX_EDGE / longest)
+
+        let canvas = src
+        if (scale < 1) {
+          canvas = document.createElement('canvas')
+          canvas.width  = Math.round(src.width  * scale)
+          canvas.height = Math.round(src.height * scale)
+          canvas.getContext('2d').drawImage(src, 0, 0, canvas.width, canvas.height)
+        }
+        canvas.toBlob((blob) => resolve(blob), 'image/jpeg', SNAPSHOT_QUALITY)
+      } catch (_) {
+        resolve(null)
+      }
+    })
   }
 
   _updateRomBar() {
@@ -1069,6 +1163,28 @@ export class MeasureView {
     this._syncDot.title = status.state === 'pending'
       ? `${status.pendingCount} change(s) waiting to sync`
       : status.state
+  }
+
+  /**
+   * Refresh the local snapshot-cache gauge from imageStore usage. Cheap and
+   * async; called on mount, after each save, and whenever sync status changes
+   * (an upload completing drops the pending count and frees cache).
+   */
+  async _updateStorageGauge() {
+    if (!this._storageGauge) return
+    const u   = await usage()
+    const pct = BUDGET_BYTES > 0 ? Math.min(100, Math.round((u.bytes / BUDGET_BYTES) * 100)) : 0
+
+    this._gaugeFill.style.width = pct + '%'
+    this._storageGauge.classList.toggle('warn', pct >= 80 && pct < 95)
+    this._storageGauge.classList.toggle('crit', pct >= 95)
+
+    // pendingCount = un-uploaded blobs (the only local copy) — the real backlog.
+    const cloud = (isConfigured() && u.pendingCount > 0) ? ` · ☁ ${u.pendingCount} to upload` : ''
+    this._gaugeLabel.textContent = `Cache ${pct}%${cloud}`
+
+    // Only surface the gauge once there's something cached, to avoid clutter.
+    this._storageGauge.style.display = u.count > 0 ? 'flex' : 'none'
   }
 
   // ─── Drawer ──────────────────────────────────────────────────────────

@@ -34,6 +34,7 @@
  */
 
 import { generateId } from './id.js'
+import * as imageStore from './imageStore.js'
 
 const KEYS = {
   SESSIONS: 'rom_sessions',
@@ -101,10 +102,40 @@ export function deleteSession(sessionId) {
     const sessions = loadSessions()
     const filtered = sessions.filter(s => s.id !== sessionId)
     localStorage.setItem(KEYS.SESSIONS, JSON.stringify(filtered))
+    // Drop the local snapshot blobs too; the delete_session sync op removes the
+    // cloud copies. Fire-and-forget — IndexedDB cleanup isn't load-bearing.
+    imageStore.deleteSessionImages(sessionId)
     enqueueOp({ type: 'delete_session', entity_id: sessionId })
     return true
   } catch (e) {
     console.error('Failed to delete session:', e)
+    return false
+  }
+}
+
+/**
+ * Record the Supabase Storage path for one uploaded snapshot on its session.
+ * Called by sync.js after a successful image upload; bumps updated_at so the
+ * path wins the last-write-wins merge and reaches the cloud on the next push.
+ *
+ * @param {string} sessionId
+ * @param {'peak'|'min'} which
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function setSessionFramePath(sessionId, which, path) {
+  try {
+    const raw = localStorage.getItem(KEYS.SESSIONS)
+    if (!raw) return false
+    const sessions = JSON.parse(raw)
+    const idx = sessions.findIndex(s => s.id === sessionId)
+    if (idx === -1) return false
+    const field = which === 'peak' ? 'peakFramePath' : 'minFramePath'
+    sessions[idx] = { ...sessions[idx], [field]: path, updated_at: Date.now() }
+    localStorage.setItem(KEYS.SESSIONS, JSON.stringify(sessions))
+    return true
+  } catch (e) {
+    console.error('Failed to set frame path:', e)
     return false
   }
 }
@@ -245,6 +276,17 @@ export function enqueueOp(op) {
   }
 }
 
+/**
+ * Queue an image upload for one snapshot. The blob itself lives in imageStore
+ * (IndexedDB); the op is just a pointer sync.js resolves at push time.
+ *
+ * @param {string} sessionId
+ * @param {'peak'|'min'} which
+ */
+export function enqueueImageUpload(sessionId, which) {
+  return enqueueOp({ type: 'upload_image', entity_id: `${sessionId}:${which}` })
+}
+
 /** Remove a completed (or permanently failed) op from the outbox. */
 export function removeOp(opId) {
   try {
@@ -333,10 +375,67 @@ export function clearAllLocalData() {
     localStorage.removeItem(KEYS.SESSIONS)
     localStorage.removeItem(KEYS.PATIENTS)
     localStorage.removeItem(KEYS.OUTBOX)
+    // Snapshot blobs live in IndexedDB — wipe them too. Safe because uploaded
+    // copies are in the cloud and re-download on next login; any un-uploaded
+    // blobs should already have been flagged to the user before sign-out.
+    imageStore.clearAll()
     saveSettings({ active_patient_id: null, calibration_offset: 0 })
     return true
   } catch (e) {
     return false
+  }
+}
+
+/**
+ * One-time rescue for sessions saved before snapshots moved to IndexedDB:
+ * their images are inline base64 data URLs bloating localStorage (the very
+ * thing that filled the quota). Convert each to a Blob in imageStore, queue it
+ * for cloud upload, and strip the inline field. Idempotent — a second run finds
+ * nothing to do. Runs on boot.
+ *
+ * @returns {Promise<number>} how many inline images were migrated
+ */
+export async function migrateInlineImages() {
+  if (typeof indexedDB === 'undefined') return 0
+  try {
+    const raw = localStorage.getItem(KEYS.SESSIONS)
+    if (!raw) return 0
+    const sessions = JSON.parse(raw)
+    let migrated = 0
+    for (const s of sessions) {
+      for (const [field, which] of [['peakFrame', 'peak'], ['minFrame', 'min']]) {
+        const val = s[field]
+        if (typeof val === 'string' && val.startsWith('data:image')) {
+          const blob = _dataUrlToBlob(val)
+          if (blob && await imageStore.putImage(s.id, which, blob)) {
+            enqueueImageUpload(s.id, which)
+            delete s[field]
+            migrated++
+          }
+        }
+      }
+    }
+    if (migrated) localStorage.setItem(KEYS.SESSIONS, JSON.stringify(sessions))
+    return migrated
+  } catch (e) {
+    console.error('migrateInlineImages failed:', e)
+    return 0
+  }
+}
+
+/** Decode a base64 data: URL to a Blob without a network round-trip. */
+function _dataUrlToBlob(dataUrl) {
+  try {
+    const comma = dataUrl.indexOf(',')
+    const meta  = dataUrl.slice(0, comma)
+    const b64   = dataUrl.slice(comma + 1)
+    const mime  = (meta.match(/data:([^;]+)/) || [])[1] || 'image/jpeg'
+    const bin   = atob(b64)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return new Blob([bytes], { type: mime })
+  } catch (_) {
+    return null
   }
 }
 

@@ -107,6 +107,11 @@ export class SessionRecorder {
       angleFilter:   'euro1',
       notes:         '',
       app_version:   '0.1.0',
+      // Supabase Storage paths for the two overlay snapshots. Null until the
+      // blob (held in imageStore/IndexedDB) has been uploaded by sync.js; the
+      // image BYTES never live on the session object — that filled localStorage.
+      peakFramePath: null,
+      minFramePath:  null,
     }
   }
 
@@ -123,22 +128,6 @@ export class SessionRecorder {
   static attachNotes(session, notes) {
     if (!session) return null
     return { ...session, notes: (notes || '').trim().slice(0, 200) }
-  }
-
-  /**
-   * Attach the snapshots taken at both range extremes.
-   * peakFrame keeps its legacy name (max flexion) so old sessions and
-   * existing readers keep working; minFrame is the max-extension pose.
-   *
-   * @param {Session} session
-   * @param {{maxFrame?: string|null, minFrame?: string|null}} frames
-   * @returns {Session} the same session with frames attached
-   */
-  static attachFrames(session, { maxFrame, minFrame } = {}) {
-    if (!session) return session
-    if (maxFrame) session.peakFrame = maxFrame
-    if (minFrame) session.minFrame  = minFrame
-    return session
   }
 
   get isActive()     { return this._active }

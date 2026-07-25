@@ -299,9 +299,9 @@ describe('SessionRecorder.attachNotes()', () => {
 
 })
 
-// ─── SessionRecorder.attachFrames ────────────────────────────────────────────
+// ─── Snapshot frame paths ────────────────────────────────────────────────────
 
-describe('SessionRecorder.attachFrames()', () => {
+describe('snapshot frame paths', () => {
 
   function recordedSession() {
     const recorder = new SessionRecorder()
@@ -312,43 +312,14 @@ describe('SessionRecorder.attachFrames()', () => {
     return recorder.stop()
   }
 
-  it('attaches both extreme frames', () => {
+  it('a fresh session carries null cloud paths and NO inline image bytes', () => {
     const session = recordedSession()
-    const result  = SessionRecorder.attachFrames(session, {
-      maxFrame: 'data:image/jpeg;base64,MAX',
-      minFrame: 'data:image/jpeg;base64,MIN',
-    })
-    expect(result.peakFrame).toBe('data:image/jpeg;base64,MAX')
-    expect(result.minFrame).toBe('data:image/jpeg;base64,MIN')
-  })
-
-  it('attaches only the max frame when min is missing', () => {
-    const session = recordedSession()
-    SessionRecorder.attachFrames(session, { maxFrame: 'data:image/jpeg;base64,MAX', minFrame: null })
-    expect(session.peakFrame).toBe('data:image/jpeg;base64,MAX')
-    expect(session).not.toHaveProperty('minFrame')
-  })
-
-  it('attaches only the min frame when max is missing', () => {
-    const session = recordedSession()
-    SessionRecorder.attachFrames(session, { maxFrame: null, minFrame: 'data:image/jpeg;base64,MIN' })
-    expect(session.minFrame).toBe('data:image/jpeg;base64,MIN')
-    expect(session).not.toHaveProperty('peakFrame')
-  })
-
-  it('leaves the session untouched when no frames are given', () => {
-    const session = recordedSession()
-    SessionRecorder.attachFrames(session, {})
+    // Paths start null — set later by sync.js once the blob is uploaded.
+    expect(session.peakFramePath).toBeNull()
+    expect(session.minFramePath).toBeNull()
+    // Image bytes must never live on the session object (that filled localStorage).
     expect(session).not.toHaveProperty('peakFrame')
     expect(session).not.toHaveProperty('minFrame')
-
-    SessionRecorder.attachFrames(session)   // frames argument omitted entirely
-    expect(session).not.toHaveProperty('peakFrame')
-    expect(session).not.toHaveProperty('minFrame')
-  })
-
-  it('returns the session unchanged when session is null', () => {
-    expect(SessionRecorder.attachFrames(null, { maxFrame: 'x' })).toBeNull()
   })
 
 })
