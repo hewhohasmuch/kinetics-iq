@@ -100,6 +100,11 @@ export class SessionRecorder {
       samples:       this._angles.length,
       angleTimeline: timeline,   // full sample array for detail chart
       angleMode:     '3d',       // measured with 3D world landmarks; older sessions lack this (2D)
+      // Filter generation that produced these angles. Sessions without this
+      // field predate the peak-clipping fix and read systematically low at the
+      // extremes — do not compare their ROM against 'euro1' sessions as if the
+      // difference were the patient's.
+      angleFilter:   'euro1',
       notes:         '',
       app_version:   '0.1.0',
     }

@@ -66,6 +66,16 @@ describe('SessionRecorder', () => {
     expect(session.app_version).toBe('0.1.0')
   })
 
+  it('stamps the filter generation that produced the angles', () => {
+    // Sessions recorded before the peak-clipping fix are systematically low.
+    // Without this marker they would be compared against post-fix sessions as
+    // if equivalent, showing improvement that is really just the filter change.
+    recorder.start()
+    recorder.record(45)
+
+    expect(recorder.stop().angleFilter).toBe('euro1')
+  })
+
   // ─── setContext ───────────────────────────────────────────────────
 
   it('setContext values appear in the session object', () => {

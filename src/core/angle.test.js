@@ -9,7 +9,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { jointAngle, toFlexionAngle, AngleSmoother, applyCalibration, DeadZoneFilter } from './angle.js'
+import {
+  jointAngle, toFlexionAngle, AngleSmoother, applyCalibration, DeadZoneFilter,
+  MedianFilter3, OneEuroFilter,
+} from './angle.js'
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
@@ -281,5 +284,191 @@ describe('DeadZoneFilter', () => {
     f.reset()
     expect(f.value).toBeNull()
     expect(f.push(45)).toBe(45)  // first value after reset passes through
+  })
+})
+
+// ─── MedianFilter3 ─────────────────────────────────────────────────────────────
+
+describe('MedianFilter3', () => {
+
+  it('passes the first value through unchanged', () => {
+    const f = new MedianFilter3()
+    expect(f.push(90)).toBe(90)
+  })
+
+  it('rejects a single-frame spike', () => {
+    const f = new MedianFilter3()
+    f.push(90)
+    f.push(90)
+    expect(f.push(150)).toBe(90)   // one bad landmark frame — never surfaces
+    expect(f.push(90)).toBe(90)
+  })
+
+  it('passes a genuine sustained peak through', () => {
+    // A real end-range peak lasts more than one frame, so it must survive.
+    const f = new MedianFilter3()
+    f.push(90)
+    f.push(90)
+    f.push(130)
+    expect(f.push(130)).toBe(130)
+  })
+
+  it('holds the current value when the pose is lost', () => {
+    const f = new MedianFilter3()
+    f.push(90)
+    f.push(90)
+    f.push(90)
+    expect(f.push(null)).toBe(90)      // null does not enter the buffer
+    expect(f.push(90)).toBe(90)        // ...and did not corrupt it
+  })
+
+  it('resets cleanly', () => {
+    const f = new MedianFilter3()
+    f.push(90)
+    f.push(90)
+    f.reset()
+    expect(f.push(45)).toBe(45)
+  })
+})
+
+// ─── OneEuroFilter ─────────────────────────────────────────────────────────────
+
+describe('OneEuroFilter', () => {
+
+  it('passes the first sample through as its seed', () => {
+    const f = new OneEuroFilter()
+    expect(f.push(90, 0)).toBe(90)
+  })
+
+  it('converges to a constant input and stays there', () => {
+    const f = new OneEuroFilter()
+    let out = null
+    for (let i = 0; i < 50; i++) out = f.push(90, i * 100)
+    expectAngle(out, 90, 0.1)
+  })
+
+  it('re-seeds after a gap instead of integrating a huge derivative', () => {
+    // Pose lost for 2s, reacquired at a very different angle. Without a reset
+    // the derivative term explodes and the output overshoots wildly.
+    const f = new OneEuroFilter()
+    for (let i = 0; i < 20; i++) f.push(90, i * 100)
+    const out = f.push(30, 20 * 100 + 2000)
+    expectAngle(out, 30, 0.01)
+  })
+
+  it('holds the current value when the pose is lost', () => {
+    const f = new OneEuroFilter()
+    for (let i = 0; i < 20; i++) f.push(90, i * 100)
+    expect(f.push(null, 2100)).toBeCloseTo(90, 1)
+  })
+
+  it('resets cleanly', () => {
+    const f = new OneEuroFilter()
+    for (let i = 0; i < 20; i++) f.push(90, i * 100)
+    f.reset()
+    expect(f.push(45, 5000)).toBe(45)
+  })
+})
+
+// ─── Peak-flexion clipping regression ──────────────────────────────────────────
+
+/**
+ * Deterministic pseudo-random in [-1, 1] — seeded so the jitter test can't
+ * flake between runs.
+ */
+function seededNoise(seed) {
+  let s = seed
+  return () => {
+    s = (s * 1664525 + 1013904223) % 4294967296
+    return (s / 4294967296) * 2 - 1
+  }
+}
+
+/**
+ * A realistic ROM sweep: the joint accelerates out of neutral, decelerates
+ * into end range, and returns — one cosine cycle from 0° to `amplitude` and
+ * back. A perfect triangle wave would be unfair to any median prefilter
+ * (its apex is a single sample, indistinguishable from a spike); a real
+ * turnaround dwells near the peak because the limb has to decelerate.
+ */
+function sweepSamples({ amplitude = 130, periodS = 4, hz = 10 } = {}) {
+  const out = []
+  const n = Math.round(periodS * hz)
+  for (let i = 0; i <= n; i++) {
+    const t = i / hz
+    out.push({
+      ms:    t * 1000,
+      value: (amplitude / 2) * (1 - Math.cos((2 * Math.PI * t) / periodS)),
+    })
+  }
+  return out
+}
+
+/** The chain as it was: 1.5s moving average, then a 2° dead zone. */
+function runOldChain(samples) {
+  const smoother = new AngleSmoother(15)
+  const deadZone = new DeadZoneFilter(2.0)
+  let peak = -Infinity
+  for (const s of samples) {
+    const out = deadZone.push(smoother.push(s.value))
+    if (out !== null) peak = Math.max(peak, out)
+  }
+  return peak
+}
+
+/** The chain as it is now: median-of-3 spike rejection, then One Euro. */
+function runNewChain(samples) {
+  const median = new MedianFilter3()
+  const euro   = new OneEuroFilter()
+  let peak = -Infinity
+  for (const s of samples) {
+    const out = euro.push(median.push(s.value), s.ms)
+    if (out !== null) peak = Math.max(peak, out)
+  }
+  return peak
+}
+
+describe('peak flexion is not clipped by the filter chain', () => {
+
+  const TRUE_PEAK = 130
+
+  it('documents the clipping in the old moving-average chain', () => {
+    // Regression guard on the bug itself: a 1.5s trailing average still holds
+    // 0.7s of shallower angles at the turnaround, so the apex is attenuated.
+    const clipped = TRUE_PEAK - runOldChain(sweepSamples())
+    expect(clipped).toBeGreaterThan(10)
+  })
+
+  it('recovers the peak on a dynamic sweep', () => {
+    const clipped = TRUE_PEAK - runNewChain(sweepSamples())
+    expect(clipped).toBeLessThan(3)
+  })
+
+  it('recovers most of the peak on an unrealistically fast sweep', () => {
+    // Stress case: 130° out and back in 2s (peak ~204°/s), faster than a
+    // clinical ROM assessment. The ~3° residual here is NOT filter lag —
+    // widening `beta` five-fold barely moves it. At 10Hz the apex of a sweep
+    // this fast spans about one sample (its neighbours sit 3.2° below it), so
+    // the median prefilter rounds it off. That is the sample rate talking, and
+    // it is the argument for raising the detection rate if fast sweeps ever
+    // matter clinically. Still a 5x improvement on the old chain's 15°.
+    const clipped = TRUE_PEAK - runNewChain(sweepSamples({ periodS: 2 }))
+    expect(clipped).toBeLessThan(4)
+  })
+
+  it('still holds steady on a stationary joint', () => {
+    // The other half of the trade-off: recovering the peak must not buy a
+    // twitchy readout. ±1.5° of landmark noise on a held 90° position.
+    const noise = seededNoise(12345)
+    const median = new MedianFilter3()
+    const euro   = new OneEuroFilter()
+    const outputs = []
+    for (let i = 0; i < 100; i++) {
+      const out = euro.push(median.push(90 + noise() * 1.5), i * 100)
+      if (i >= 50) outputs.push(out)   // ignore the settling period
+    }
+    const mean = outputs.reduce((a, b) => a + b, 0) / outputs.length
+    const sd   = Math.sqrt(outputs.reduce((a, b) => a + (b - mean) ** 2, 0) / outputs.length)
+    expect(sd).toBeLessThan(0.5)
   })
 })

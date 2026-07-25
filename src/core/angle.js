@@ -174,6 +174,156 @@ export function applyCalibration(rawAngle, offsetAngle) {
 }
 
 /**
+ * MedianFilter3 — returns the median of the last three samples.
+ *
+ * This is the spike defence for the measurement chain. MediaPipe occasionally
+ * misplaces a landmark for a single frame; a mean drags that error into the
+ * output, a median discards it outright.
+ *
+ * Crucially — unlike a moving average — a median does not round off peaks.
+ * A real end-range position lasts more than one frame (the limb has to
+ * decelerate into it), so it survives; a one-frame outlier does not.
+ *
+ * Costs one sample of delay (~100ms at 10Hz).
+ */
+export class MedianFilter3 {
+  constructor() {
+    this._buffer = []
+  }
+
+  /**
+   * Add a sample and return the median of the last ≤3.
+   * Null (pose lost) returns the current value without entering the buffer —
+   * same contract as AngleSmoother.push().
+   *
+   * @param {number|null} value
+   * @returns {number|null}
+   */
+  push(value) {
+    if (value === null || value === undefined || isNaN(value)) {
+      return this.current()
+    }
+
+    this._buffer.push(value)
+    if (this._buffer.length > 3) {
+      this._buffer.shift()
+    }
+
+    return this.current()
+  }
+
+  /**
+   * Current median without pushing a new value.
+   * @returns {number|null}
+   */
+  current() {
+    const n = this._buffer.length
+    if (n === 0) return null
+    // Sort a copy — the buffer must stay in arrival order for the shift above
+    const sorted = [...this._buffer].sort((a, b) => a - b)
+    return sorted[Math.floor(n / 2)]
+  }
+
+  reset() {
+    this._buffer = []
+  }
+}
+
+/**
+ * OneEuroFilter — an adaptive low-pass filter.
+ *
+ * WHY THIS AND NOT A MOVING AVERAGE:
+ * A fixed-window average has a fixed lag — here 0.7s, which clipped 10–15° off
+ * the peak of any dynamic sweep, because at the turnaround the window still
+ * held 0.7s of shallower angles. Widening it calms the readout and worsens the
+ * clipping; narrowing it does the reverse. There is no good setting.
+ *
+ * One Euro escapes that trade-off by varying its cutoff with speed:
+ *   - joint stationary → low cutoff → heavy smoothing → calm readout
+ *   - joint moving     → high cutoff → light smoothing → the peak survives
+ *
+ * Speed is what distinguishes jitter from real movement, so the filter can be
+ * calm exactly when calmness is free.
+ *
+ * It is also timestamp-aware: it takes dt per sample rather than assuming a
+ * fixed rate, so it degrades gracefully if the detection rate varies — where a
+ * fixed-window average silently changes its own time constant.
+ *
+ * Reference: Casiez, Roussel & Vogel, "1€ Filter" (CHI 2012).
+ *
+ * @param {number} minCutoff - cutoff (Hz) at rest. Lower = calmer, more lag.
+ *                             This is the knob to turn if the readout feels twitchy.
+ * @param {number} beta      - how fast the cutoff opens with speed (deg/s).
+ *                             Higher = less lag when moving, more noise.
+ * @param {number} dCutoff   - cutoff (Hz) for the speed estimate itself.
+ */
+export class OneEuroFilter {
+  constructor({ minCutoff = 1.0, beta = 0.04, dCutoff = 1.0 } = {}) {
+    this.minCutoff = minCutoff
+    this.beta      = beta
+    this.dCutoff   = dCutoff
+    this.reset()
+  }
+
+  /**
+   * Filter one sample.
+   *
+   * @param {number|null} value       - raw angle in degrees
+   * @param {number}      timestampMs - monotonic timestamp (performance.now())
+   * @returns {number|null} filtered angle, or the current value if input is null
+   */
+  push(value, timestampMs) {
+    if (value === null || value === undefined || isNaN(value)) {
+      return this._xHat
+    }
+
+    // First sample, or the pose was lost long enough that continuity is broken:
+    // seed from this sample rather than integrating a huge derivative across
+    // the gap, which would send the output flying past the true angle.
+    const dt = this._lastTime === null ? null : (timestampMs - this._lastTime) / 1000
+    if (dt === null || dt <= 0 || dt > GAP_RESET_S) {
+      this._xHat     = value
+      this._dxHat    = 0
+      this._lastTime = timestampMs
+      return this._xHat
+    }
+
+    // Low-pass the derivative before using it to steer the cutoff — the raw
+    // frame-to-frame derivative is far too noisy to drive the filter with.
+    const dx    = (value - this._xHat) / dt
+    this._dxHat = this._lowPass(dx, this._dxHat, this.dCutoff, dt)
+
+    // Adaptive cutoff: opens as the joint moves faster.
+    const cutoff = this.minCutoff + this.beta * Math.abs(this._dxHat)
+    this._xHat   = this._lowPass(value, this._xHat, cutoff, dt)
+
+    this._lastTime = timestampMs
+    return this._xHat
+  }
+
+  /** Current filtered value without pushing a sample. */
+  get value() { return this._xHat }
+
+  reset() {
+    this._xHat     = null
+    this._dxHat    = 0
+    this._lastTime = null
+  }
+
+  // Exponential smoothing with the time constant implied by `cutoff`.
+  _lowPass(value, prev, cutoff, dt) {
+    const tau   = 1 / (2 * Math.PI * cutoff)
+    const alpha = 1 / (1 + tau / dt)
+    return alpha * value + (1 - alpha) * prev
+  }
+}
+
+// Gap (seconds) beyond which the filter re-seeds instead of smoothing across.
+// Roughly "the pose was lost, not merely slow" — a few dropped frames at 10Hz
+// stay well inside this.
+const GAP_RESET_S = 0.5
+
+/**
  * DeadZoneFilter — only passes a new value through if it has changed
  * by more than `threshold` degrees from the last output.
  *
