@@ -14,6 +14,7 @@ import {
 } from '../core/storage.js'
 import { isConfigured, signOut } from '../core/supabase.js'
 import { syncNow, getStatus, onSyncStatus } from '../core/sync.js'
+import { listPending } from '../core/imageStore.js'
 
 export class PatientsView {
   /**
@@ -72,16 +73,19 @@ export class PatientsView {
       btnSignOut.addEventListener('click', async () => {
         if (!confirm('Sign out? Patient data is removed from this device after it has been backed up to your account.')) return
         try {
-          // Sign-out wipes all local data (including the sync outbox), so any
-          // change that hasn't reached the cloud yet would be lost forever.
-          // Drain the outbox first and refuse to sign out while ops remain.
+          // Sign-out wipes all local data — the sync outbox AND the snapshot
+          // blobs in IndexedDB — so anything that hasn't reached the cloud yet
+          // would be lost forever. Drain first, then refuse while ops remain OR
+          // any snapshot is still un-uploaded (its only copy is on this device).
           await syncNow()
           const { pendingCount } = getStatus()
-          if (pendingCount > 0) {
+          const pendingImages = (await listPending()).length
+          const stuck = Math.max(pendingCount, pendingImages)
+          if (stuck > 0) {
             alert(
-              `${pendingCount} change${pendingCount === 1 ? ' hasn’t' : 's haven’t'} ` +
-              'been backed up to your account yet. Check your connection and try again — ' +
-              'signing out now would lose this data.'
+              `${stuck} item${stuck === 1 ? ' hasn’t' : 's haven’t'} ` +
+              'finished backing up to your account yet (including session photos). ' +
+              'Check your connection and try again — signing out now would lose this data.'
             )
             return
           }

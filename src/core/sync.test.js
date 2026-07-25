@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('./supabase.js', () => ({
-  getClient: vi.fn(),
+  getClient:  vi.fn(),
+  getUserId:  vi.fn(() => Promise.resolve('user-123')),
 }))
 
 vi.mock('./storage.js', () => ({
@@ -18,12 +19,21 @@ vi.mock('./storage.js', () => ({
   setOutboxListener:   vi.fn(),
   loadSessions:        vi.fn(() => []),
   getPatient:          vi.fn(() => null),
+  setSessionFramePath: vi.fn(),
+  enqueueOp:           vi.fn(),
   mergeRemotePatients: vi.fn(),
   mergeRemoteSessions: vi.fn(),
 }))
 
-import { getClient } from './supabase.js'
+vi.mock('./imageStore.js', () => ({
+  getImage:      vi.fn(() => Promise.resolve(null)),
+  markUploaded:  vi.fn(() => Promise.resolve(true)),
+  enforceBudget: vi.fn(() => Promise.resolve(0)),
+}))
+
+import { getClient, getUserId } from './supabase.js'
 import * as storage from './storage.js'
+import * as imageStore from './imageStore.js'
 import {
   processOutbox, pullAll,
   sessionToRow, rowToSession, patientToRow, rowToPatient,
@@ -32,7 +42,7 @@ import { generateId } from './id.js'
 
 // ─── Fake supabase client ────────────────────────────────────────────────────
 
-function fakeClient({ upsert, del, select } = {}) {
+function fakeClient({ upsert, del, select, upload, removeObj } = {}) {
   return {
     from: (table) => ({
       upsert: (row) => Promise.resolve(upsert ? upsert(table, row) : { error: null }),
@@ -41,6 +51,14 @@ function fakeClient({ upsert, del, select } = {}) {
       }),
       select: () => Promise.resolve(select ? select(table) : { data: [], error: null }),
     }),
+    storage: {
+      from: (bucket) => ({
+        upload: (path, blob, opts) =>
+          Promise.resolve(upload ? upload(bucket, path, blob, opts) : { error: null }),
+        remove: (paths) =>
+          Promise.resolve(removeObj ? removeObj(bucket, paths) : { data: [], error: null }),
+      }),
+    },
   }
 }
 
@@ -56,6 +74,9 @@ function makeSession(overrides = {}) {
     angleTimeline: [5, 60, 120],
     angleMode: '3d', notes: 'hi', app_version: '0.1.0',
     updated_at: 1700000001000,
+    peakFramePath: 'user-123/sess/peak.jpg',
+    minFramePath:  'user-123/sess/min.jpg',
+    // Legacy inline bytes — must never leak into a pushed row.
     peakFrame: 'data:image/jpeg;base64,xxxx',
     minFrame:  'data:image/jpeg;base64,yyyy',
     ...overrides,
@@ -106,6 +127,9 @@ describe('processOutbox', () => {
     expect(sent).not.toHaveProperty('minFrame')
     expect(sent).not.toHaveProperty('angleTimeline')
     expect(sent).not.toHaveProperty('clinician_id')   // column default fills it
+    // Only the lightweight cloud paths travel, not the bytes.
+    expect(sent.peak_frame_path).toBe('user-123/sess/peak.jpg')
+    expect(sent.min_frame_path).toBe('user-123/sess/min.jpg')
   })
 
   it('keeps the op and stops the drain on a network error', async () => {
@@ -181,6 +205,84 @@ describe('processOutbox', () => {
     expect(deleted).toEqual({ table: 'sessions', col: 'id', val: id })
     expect(storage.removeOp).toHaveBeenCalledWith('op1')
   })
+
+  it('removes cloud snapshots alongside a session delete (PHI hygiene)', async () => {
+    const id = generateId()
+    let removedPaths = null
+    storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'delete_session', entity_id: id }])
+    getClient.mockReturnValue(fakeClient({
+      removeObj: (_bucket, paths) => { removedPaths = paths; return { data: [], error: null } },
+    }))
+
+    await processOutbox()
+
+    expect(removedPaths).toEqual([`user-123/${id}/peak.jpg`, `user-123/${id}/min.jpg`])
+    expect(storage.removeOp).toHaveBeenCalledWith('op1')
+  })
+})
+
+// ─── upload_image ────────────────────────────────────────────────────────────
+
+describe('upload_image op', () => {
+
+  it('uploads the blob, records the path, marks uploaded, and queues a session upsert', async () => {
+    const id = generateId()
+    const blob = new Blob(['jpegbytes'], { type: 'image/jpeg' })
+    let uploaded = null
+    storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'upload_image', entity_id: `${id}:peak` }])
+    imageStore.getImage.mockResolvedValue(blob)
+    getClient.mockReturnValue(fakeClient({
+      upload: (bucket, path, b, opts) => { uploaded = { bucket, path, b, opts }; return { error: null } },
+    }))
+
+    await processOutbox()
+
+    expect(uploaded.bucket).toBe('session-images')
+    expect(uploaded.path).toBe(`user-123/${id}/peak.jpg`)
+    expect(uploaded.opts).toMatchObject({ upsert: true, contentType: 'image/jpeg' })
+    expect(storage.setSessionFramePath).toHaveBeenCalledWith(id, 'peak', `user-123/${id}/peak.jpg`)
+    expect(imageStore.markUploaded).toHaveBeenCalledWith(id, 'peak')
+    expect(storage.enqueueOp).toHaveBeenCalledWith({ type: 'upsert_session', entity_id: id })
+    expect(imageStore.enforceBudget).toHaveBeenCalled()
+    expect(storage.removeOp).toHaveBeenCalledWith('op1')
+  })
+
+  it('drops the op when the blob is gone (evicted or session deleted)', async () => {
+    const id = generateId()
+    storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'upload_image', entity_id: `${id}:min` }])
+    imageStore.getImage.mockResolvedValue(null)
+    getClient.mockReturnValue(fakeClient())
+
+    await processOutbox()
+
+    expect(storage.setSessionFramePath).not.toHaveBeenCalled()
+    expect(storage.removeOp).toHaveBeenCalledWith('op1')   // missing → drop, don't retry forever
+  })
+
+  it('keeps the op and stops the drain on an upload network error', async () => {
+    const id = generateId()
+    storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'upload_image', entity_id: `${id}:peak` }])
+    imageStore.getImage.mockResolvedValue(new Blob(['x']))
+    getClient.mockReturnValue(fakeClient({
+      upload: () => ({ error: { message: 'TypeError: Failed to fetch' } }),
+    }))
+
+    await processOutbox()
+
+    expect(storage.removeOp).not.toHaveBeenCalled()
+    expect(imageStore.markUploaded).not.toHaveBeenCalled()
+  })
+
+  it('validates the sessionId portion — legacy non-UUID session ids are skipped', async () => {
+    storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'upload_image', entity_id: 'sess_1700000000000:peak' }])
+    let uploads = 0
+    getClient.mockReturnValue(fakeClient({ upload: () => { uploads++; return { error: null } } }))
+
+    await processOutbox()
+
+    expect(uploads).toBe(0)
+    expect(storage.removeOp).toHaveBeenCalledWith('op1')
+  })
 })
 
 // ─── pullAll ─────────────────────────────────────────────────────────────────
@@ -236,6 +338,8 @@ describe('shape mapping', () => {
     expect(back.notes).toBe(session.notes)
     expect(back.updated_at).toBe(session.updated_at)
     expect(back).not.toHaveProperty('peakFrame')
+    expect(back.peakFramePath).toBe(session.peakFramePath)
+    expect(back.minFramePath).toBe(session.minFramePath)
   })
 
   it('patient survives a client → row → client round trip', () => {

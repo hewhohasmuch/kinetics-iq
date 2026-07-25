@@ -11,7 +11,11 @@
  */
 
 import { deleteSession } from '../core/storage.js'
+import { getImage, cacheUploaded } from '../core/imageStore.js'
+import { getClient, isConfigured } from '../core/supabase.js'
 import { Chart } from 'chart.js/auto'
+
+const IMAGE_BUCKET = 'session-images'
 
 export class SessionDetailView {
   /**
@@ -24,6 +28,7 @@ export class SessionDetailView {
     this.session   = session
     this.onBack    = onBack
     this._chart    = null
+    this._objectUrls = []   // blob: URLs to revoke on unmount
   }
 
   mount() {
@@ -36,6 +41,8 @@ export class SessionDetailView {
       this._chart.destroy()
       this._chart = null
     }
+    for (const url of this._objectUrls) URL.revokeObjectURL(url)
+    this._objectUrls = []
     this.container.innerHTML = ''
   }
 
@@ -72,27 +79,9 @@ export class SessionDetailView {
       notesEl.style.display  = 'none'
     }
 
-    // ROM frames — peakFrame = max flexion (most bent), minFrame = max
-    // extension (straightest). Old sessions only have peakFrame.
-    const framesEl = document.getElementById('detail-frames')
-    if (framesEl && (s.peakFrame || s.minFrame)) {
-      const maxFig = document.getElementById('frame-max')
-      const minFig = document.getElementById('frame-min')
-      if (s.peakFrame) {
-        maxFig.querySelector('img').src = s.peakFrame
-        maxFig.querySelector('.peak-frame-caption').textContent = `Peak flexion: ${s.max}°`
-        maxFig.style.display = 'block'
-      }
-      if (s.minFrame) {
-        minFig.querySelector('img').src = s.minFrame
-        minFig.querySelector('.peak-frame-caption').textContent = `Peak extension: ${s.min}°`
-        minFig.style.display = 'block'
-      }
-      if (!s.peakFrame || !s.minFrame) {
-        framesEl.querySelector('.rom-frames').classList.add('single')
-      }
-      framesEl.style.display = 'block'
-    }
+    // ROM frames load asynchronously from IndexedDB (local cache) or the cloud
+    // — see _renderFrames. Not awaited: the rest of the detail renders now.
+    this._renderFrames(s)
 
     // Chart
     this._renderChart(s.angleTimeline, s.duration_s)
@@ -103,6 +92,80 @@ export class SessionDetailView {
 
     document.getElementById('btn-detail-delete')
       .addEventListener('click', () => this._handleDelete())
+  }
+
+  /**
+   * Load and display the two extreme-pose snapshots. Each frame resolves from
+   * the local IndexedDB cache first (offline-safe), then falls back to a cloud
+   * download when a path is known and we're online. A frame that exists in the
+   * cloud but can't be fetched right now shows an offline placeholder.
+   *
+   * peakFrame = max flexion (most bent); minFrame = max extension (straightest).
+   */
+  async _renderFrames(s) {
+    const framesEl = document.getElementById('detail-frames')
+    if (!framesEl) return
+
+    const specs = [
+      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `Peak flexion: ${s.max}°` },
+      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `Peak extension: ${s.min}°` },
+    ]
+
+    let shown = 0
+    for (const spec of specs) {
+      const fig = document.getElementById(spec.figId)
+      if (!fig) continue
+      const url = await this._resolveFrameUrl(s.id, spec.which, spec.path)
+      if (url) {
+        fig.querySelector('img').src = url
+        fig.querySelector('.peak-frame-caption').textContent = spec.caption
+        fig.style.display = 'block'
+        shown++
+      } else if (spec.path) {
+        // Known in the cloud, just not reachable now.
+        this._showFramePlaceholder(fig, spec.caption)
+        fig.style.display = 'block'
+        shown++
+      }
+    }
+
+    if (shown === 1) framesEl.querySelector('.rom-frames').classList.add('single')
+    if (shown > 0)   framesEl.style.display = 'block'
+  }
+
+  /**
+   * Resolve a displayable object URL for one frame, or null if unavailable.
+   * Caches a cloud-fetched blob back into IndexedDB for next time.
+   * @returns {Promise<string|null>}
+   */
+  async _resolveFrameUrl(sessionId, which, path) {
+    let blob = await getImage(sessionId, which)
+
+    if (!blob && path && isConfigured() && this._isOnline()) {
+      try {
+        const { data, error } = await getClient().storage.from(IMAGE_BUCKET).download(path)
+        if (!error && data) {
+          blob = data
+          cacheUploaded(sessionId, which, blob)   // fire-and-forget re-cache
+        }
+      } catch (_) { /* placeholder path handles it */ }
+    }
+
+    if (!blob) return null
+    const url = URL.createObjectURL(blob)
+    this._objectUrls.push(url)
+    return url
+  }
+
+  _showFramePlaceholder(fig, caption) {
+    const img = fig.querySelector('img')
+    if (img) { img.removeAttribute('src'); img.style.display = 'none' }
+    fig.querySelector('.peak-frame-caption').textContent =
+      `${caption} — image not available offline`
+  }
+
+  _isOnline() {
+    return typeof navigator === 'undefined' || navigator.onLine !== false
   }
 
   _renderChart(timeline, durationS) {

@@ -38,7 +38,8 @@ create table public.sessions (
   angle_mode      text,
   notes           text default '',
   app_version     text,
-  peak_frame_path text,                                -- Supabase Storage path (future)
+  peak_frame_path text,                                -- Storage path: max-flexion snapshot
+  min_frame_path  text,                                -- Storage path: max-extension snapshot
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
@@ -54,3 +55,25 @@ create policy "own patients" on public.patients for all
 
 create policy "own sessions" on public.sessions for all
   using (clinician_id = auth.uid()) with check (clinician_id = auth.uid());
+
+-- ── Session snapshot images (Supabase Storage) ──────────────────────────────
+-- Overlay JPEGs for the two range extremes live in a PRIVATE bucket, one
+-- folder per clinician: `${auth.uid()}/${session_id}/{peak,min}.jpg`. The
+-- session row stores the object path (peak_frame_path / min_frame_path); the
+-- bytes never touch the sessions table. Blobs are staged in the client's
+-- IndexedDB and uploaded in the background.
+--
+-- Create the bucket once (private) — via the dashboard or:
+--   insert into storage.buckets (id, name, public)
+--   values ('session-images', 'session-images', false)
+--   on conflict (id) do nothing;
+insert into storage.buckets (id, name, public)
+values ('session-images', 'session-images', false)
+on conflict (id) do nothing;
+
+-- RLS: a clinician may only touch objects whose first path segment is their
+-- own uid. storage.foldername(name)[1] is that leading folder.
+create policy "own session images" on storage.objects for all
+  to authenticated
+  using      (bucket_id = 'session-images' and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'session-images' and (storage.foldername(name))[1] = auth.uid()::text);

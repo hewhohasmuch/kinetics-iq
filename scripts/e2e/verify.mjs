@@ -185,10 +185,36 @@ async function main() {
     if (Math.abs(s.min - shownMin) <= 1) pass(`saved min ${s.min}° matches displayed ${shownMin}°`)
     else fail(`saved min ${s.min}° but the readout never went below ${shownMin}°`)
 
-    for (const [label, frame] of [['peak', s.peakFrame], ['min', s.minFrame]]) {
-      if (typeof frame === 'string' && frame.startsWith('data:image/jpeg'))
-        pass(`${label} snapshot encoded (${Math.round(frame.length / 1024)}KB)`)
-      else fail(`${label} snapshot missing or not a JPEG data URL`)
+    // Snapshots moved off localStorage: the session must carry NO inline image
+    // bytes, only (initially null) cloud path fields. The JPEG blobs live in
+    // IndexedDB instead. This is the regression guard for the storage-full bug.
+    if (s.peakFrame === undefined && s.minFrame === undefined)
+      pass('no inline image bytes on the saved session (localStorage stays small)')
+    else fail('session still carries inline peakFrame/minFrame bytes')
+
+    // Read the blobs back out of IndexedDB (real store in headless Chromium).
+    // Poll briefly — persistence is async, running just after the save.
+    let imgs = []
+    for (let i = 0; i < 20 && imgs.length < 2; i++) {
+      imgs = await page.evaluate(async (sid) => {
+        const db = await new Promise((res, rej) => {
+          const r = indexedDB.open('kinetics_images', 1)
+          r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error)
+        })
+        const all = await new Promise((res, rej) => {
+          const req = db.transaction('images', 'readonly').objectStore('images').getAll()
+          req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error)
+        })
+        return all.filter(r => r.sessionId === sid)
+                  .map(r => ({ which: r.which, bytes: r.bytes }))
+      }, s.id)
+      if (imgs.length < 2) await page.waitForTimeout(200)
+    }
+    for (const which of ['peak', 'min']) {
+      const img = imgs.find(r => r.which === which)
+      if (img && img.bytes > 0)
+        pass(`${which} snapshot blob in IndexedDB (${Math.round(img.bytes / 1024)}KB)`)
+      else fail(`${which} snapshot blob missing from IndexedDB`)
     }
 
     console.log('\n5. History and detail')

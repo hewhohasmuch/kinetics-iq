@@ -8,6 +8,7 @@
  * Uses an in-memory localStorage stub (same pattern as calibration.test.js).
  */
 
+import 'fake-indexeddb/auto'
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   loadSessions, saveSession, deleteSession,
@@ -16,7 +17,9 @@ import {
   loadOutbox, enqueueOp, removeOp, setOutboxListener,
   mergeRemoteSessions, mergeRemotePatients,
   clearAllLocalData, loadSettings,
+  migrateInlineImages, setSessionFramePath,
 } from './storage.js'
+import * as imageStore from './imageStore.js'
 import { generateId } from './id.js'
 
 // ─── localStorage stub ───────────────────────────────────────────────────────
@@ -252,5 +255,61 @@ describe('clearAllLocalData', () => {
     expect(loadPatients(true)).toHaveLength(0)
     expect(loadOutbox()).toHaveLength(0)
     expect(getActivePatientId()).toBeNull()
+  })
+})
+
+// ─── setSessionFramePath ─────────────────────────────────────────────────────
+
+describe('setSessionFramePath', () => {
+  it('records the cloud path on the matching session and bumps updated_at', () => {
+    const s = saveSession(makeSession()) && loadSessions()[0]
+    const before = loadSessions()[0].updated_at
+
+    setSessionFramePath(s.id, 'peak', 'user/abc/peak.jpg')
+    setSessionFramePath(s.id, 'min', 'user/abc/min.jpg')
+
+    const after = loadSessions()[0]
+    expect(after.peakFramePath).toBe('user/abc/peak.jpg')
+    expect(after.minFramePath).toBe('user/abc/min.jpg')
+    expect(after.updated_at).toBeGreaterThanOrEqual(before)
+  })
+
+  it('is a no-op for an unknown session id', () => {
+    expect(setSessionFramePath('missing', 'peak', 'x')).toBe(false)
+  })
+})
+
+// ─── migrateInlineImages ─────────────────────────────────────────────────────
+
+describe('migrateInlineImages', () => {
+  // A 1x1 JPEG data URL (smallest valid-ish base64 payload for the decoder).
+  const DATA_URL = 'data:image/jpeg;base64,' + btoa('fake-jpeg-bytes')
+
+  beforeEach(async () => { await imageStore.clearAll() })
+
+  it('moves inline images to imageStore, queues uploads, and strips the fields', async () => {
+    // Simulate a legacy session with inline base64 frames in localStorage.
+    const legacy = { ...makeSession(), peakFrame: DATA_URL, minFrame: DATA_URL }
+    localStorage.setItem('rom_sessions', JSON.stringify([legacy]))
+
+    const migrated = await migrateInlineImages()
+
+    expect(migrated).toBe(2)
+    // Inline bytes gone from localStorage.
+    const stored = loadSessions()[0]
+    expect(stored).not.toHaveProperty('peakFrame')
+    expect(stored).not.toHaveProperty('minFrame')
+    // Blobs now in imageStore, queued for upload.
+    expect(await imageStore.getImage(legacy.id, 'peak')).toBeInstanceOf(Blob)
+    expect(await imageStore.listPending()).toHaveLength(2)
+    expect(loadOutbox().filter(o => o.type === 'upload_image')).toHaveLength(2)
+  })
+
+  it('is idempotent — a second run finds nothing to migrate', async () => {
+    const legacy = { ...makeSession(), peakFrame: DATA_URL }
+    localStorage.setItem('rom_sessions', JSON.stringify([legacy]))
+
+    expect(await migrateInlineImages()).toBe(1)
+    expect(await migrateInlineImages()).toBe(0)
   })
 })
