@@ -112,6 +112,14 @@ export class Overlay {
   /**
    * Draw the full overlay for one frame.
    * All marker coordinates are in video pixel space — we convert internally.
+   *
+   * @param {object}      markers       - proximal/joint/distal, video pixel space
+   * @param {number|null} interiorAngle - geometric angle at the joint, for the arc
+   * @param {object}      opts
+   * @param {string}      [opts.joint]      - joint name, for setup hints
+   * @param {number|null} [opts.labelAngle] - clinical angle to print; must be the
+   *                        same value the readout shows. Falls back to the hinge
+   *                        convention when absent.
    */
   draw(markers, interiorAngle, opts = {}) {
     if (!this.ctx) return
@@ -158,7 +166,14 @@ export class Overlay {
 
       if (interiorAngle !== null && interiorAngle !== undefined) {
         this._drawAngleArc(p.displayCenter, j.displayCenter, d.displayCenter, interiorAngle)
-        this._drawAngleLabel(j.displayCenter, 180 - interiorAngle)
+        // The clinical value differs per joint (see JOINT_ANGLE_CONVENTION in
+        // angle.js), so it is supplied by the caller — the one value that also
+        // reaches the readout, the recorder and the snapshots. Deriving it here
+        // would fork that into a second, joint-blind number.
+        this._drawAngleLabel(
+          j.displayCenter,
+          opts.labelAngle ?? (180 - interiorAngle),
+        )
       }
     } else {
       if (p && j) this._drawBone(p.displayCenter, j.displayCenter)

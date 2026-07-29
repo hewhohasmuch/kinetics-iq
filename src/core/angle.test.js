@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest'
 import {
   jointAngle, toFlexionAngle, AngleSmoother, applyCalibration, DeadZoneFilter,
   MedianFilter3, OneEuroFilter,
+  JOINT_ANGLE_CONVENTION, toClinicalAngle, toInteriorAngle,
 } from './angle.js'
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
@@ -470,5 +471,117 @@ describe('peak flexion is not clipped by the filter chain', () => {
     const mean = outputs.reduce((a, b) => a + b, 0) / outputs.length
     const sd   = Math.sqrt(outputs.reduce((a, b) => a + (b - mean) ** 2, 0) / outputs.length)
     expect(sd).toBeLessThan(0.5)
+  })
+})
+
+// ─── Per-joint clinical convention ───────────────────────────────────────────
+//
+// `180 - interior` is only correct for joints whose neutral is collinear.
+// The shoulder is measured elbow→shoulder→hip, where both vectors point
+// DOWNWARD at rest (interior ≈ 15°), so the old global rule inverted its whole
+// scale — an arm at the side read 165° and an arm overhead read ~20°. The ankle
+// has the same defect in milder form: its neutral interior is 90°, not 180°.
+//
+// These landmark coordinates mimic MediaPipe world landmarks: metres, origin at
+// the hip midpoint, +y DOWN, +z ANTERIOR. Right side of a standing subject.
+
+const BODY = {
+  hip:      { x: 0.10, y:  0.00, z: 0 },
+  shoulder: { x: 0.18, y: -0.55, z: 0 },
+  knee:     { x: 0.10, y:  0.45, z: 0 },
+  ankle:    { x: 0.10, y:  0.90, z: 0 },
+}
+// Shin midpoint — what JOINT_CONFIG.ankle uses as its proximal point.
+const SHIN_MID = { x: 0.10, y: 0.675, z: 0 }
+
+/** Clinical angle for a joint from three landmark points. */
+function clinical(joint, proximal, vertex, distal) {
+  return toClinicalAngle(jointAngle(proximal, vertex, distal), joint)
+}
+
+describe('per-joint clinical angle convention', () => {
+
+  it('maps each joint neutral to ~0° — no joint is inverted or offset', () => {
+    // Knee: hip → knee → ankle, leg straight (exactly collinear)
+    expectAngle(clinical('knee', BODY.hip, BODY.knee, BODY.ankle), 0, 0.5)
+
+    // Elbow: shoulder → elbow → wrist, arm straight down at the side
+    const elbowDown = { x: 0.21, y: -0.28, z: 0 }
+    const wristDown = { x: 0.24, y: -0.01, z: 0 }   // continues the shoulder→elbow line
+    expectAngle(clinical('elbow', BODY.shoulder, elbowDown, wristDown), 0, 0.5)
+
+    // Ankle: shin midpoint → ankle → foot index, foot flat (shin ⟂ foot)
+    const footNeutral = { x: 0.10, y: 0.90, z: 0.15 }
+    expectAngle(clinical('ankle', SHIN_MID, BODY.ankle, footNeutral), 0, 0.5)
+
+    // Hip: shoulder → hip → knee, standing. Not exactly 0 — the shoulder sits
+    // ~8cm lateral of the hip, so the trunk vector is genuinely off vertical.
+    // The point is that it is small, not that it is zero; Set Zero absorbs it.
+    const hipNeutral = clinical('hip', BODY.shoulder, BODY.hip, BODY.knee)
+    expect(Math.abs(hipNeutral)).toBeLessThan(12)
+
+    // Shoulder: arm hanging at the side. Same story as the hip — a small
+    // positive elevation, NOT the ~165° the old global convention produced.
+    const shoulderNeutral = clinical('shoulder', elbowDown, BODY.shoulder, BODY.hip)
+    expect(Math.abs(shoulderNeutral)).toBeLessThan(20)
+  })
+
+  it('shoulder elevation INCREASES as the arm is raised (pins the inversion)', () => {
+    const atSide   = { x: 0.21, y: -0.28, z: 0    }  // hanging
+    const forward  = { x: 0.18, y: -0.55, z: 0.27 }  // 90° forward flexion
+    const overhead = { x: 0.18, y: -0.82, z: 0    }  // near full elevation
+
+    const a = clinical('shoulder', atSide,   BODY.shoulder, BODY.hip)
+    const b = clinical('shoulder', forward,  BODY.shoulder, BODY.hip)
+    const c = clinical('shoulder', overhead, BODY.shoulder, BODY.hip)
+
+    expect(a).toBeLessThan(b)
+    expect(b).toBeLessThan(c)
+
+    // The specific regression: an arm raised nearly overhead must read as a
+    // LARGE elevation. The bug reported it as ~24° of "peak extension".
+    expect(c).toBeGreaterThan(150)
+    expectAngle(b, 90, 1)
+  })
+
+  it('knee flexion increases as the knee bends', () => {
+    const straight = clinical('knee', BODY.hip, BODY.knee, BODY.ankle)
+    const bent90   = clinical('knee', BODY.hip, BODY.knee, { x: 0.10, y: 0.45, z: -0.45 })
+    expect(straight).toBeLessThan(bent90)
+    expectAngle(bent90, 90, 1)
+  })
+
+  it('ankle dorsiflexion is positive and plantarflexion negative', () => {
+    const dorsi   = { x: 0.10, y: 0.85, z: 0.14 }   // toes pulled toward the shin
+    const plantar = { x: 0.10, y: 1.00, z: 0.12 }   // toes pointed away
+
+    expect(clinical('ankle', SHIN_MID, BODY.ankle, dorsi)).toBeGreaterThan(5)
+    expect(clinical('ankle', SHIN_MID, BODY.ankle, plantar)).toBeLessThan(-5)
+  })
+
+  it('produces negative values past neutral instead of flooring at 0', () => {
+    // Knee hyperextension: interior angle beyond 180° is impossible, but a
+    // clinical angle below the zero point must survive as a negative number.
+    expect(toClinicalAngle(185, 'knee')).toBeLessThan(0)
+    expect(toClinicalAngle(120, 'ankle')).toBeLessThan(0)
+  })
+
+  it('toInteriorAngle() is the exact inverse of toClinicalAngle()', () => {
+    for (const joint of Object.keys(JOINT_ANGLE_CONVENTION)) {
+      for (const interior of [0, 15, 42.5, 90, 137, 180]) {
+        const roundTripped = toInteriorAngle(toClinicalAngle(interior, joint), joint)
+        expectAngle(roundTripped, interior, 1e-9)
+      }
+    }
+  })
+
+  it('falls back to the knee convention for an unknown joint', () => {
+    expect(toClinicalAngle(180, 'wrist')).toBe(toClinicalAngle(180, 'knee'))
+    expect(toClinicalAngle(120, undefined)).toBe(toClinicalAngle(120, 'knee'))
+  })
+
+  it('passes null through untouched', () => {
+    expect(toClinicalAngle(null, 'knee')).toBeNull()
+    expect(toInteriorAngle(null, 'knee')).toBeNull()
   })
 })

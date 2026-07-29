@@ -13,10 +13,15 @@
  * to that neutral, so straight leg always = 0° of flexion.
  *
  * CONVENTION (matches PT goniometer convention):
- *   0°   = full extension (neutral / straight)
- *   +ve  = flexion (bending)
+ *   0°   = the captured neutral position
+ *   +ve  = flexion (or elevation / dorsiflexion, per joint)
+ *   -ve  = extension past neutral (including hyperextension)
  *
- *   flexionAngle = calibrationOffset - rawFlexionAngle
+ *   clinicalAngle = rawAngle - calibrationOffset
+ *
+ * The raw angle fed in here already carries its per-joint convention from
+ * toClinicalAngle() in angle.js — this stage only re-bases it on the neutral
+ * the clinician captured.
  *
  * PERSISTENCE:
  * The offset is saved to localStorage so it survives page reloads.
@@ -32,22 +37,32 @@ import { saveSettings, loadSettings } from './storage.js'
 
 const SAMPLE_COUNT = 20   // frames to average during calibration capture
 
-// Current calibration schema version. The 3D angle switch invalidates any
-// offset captured under the old 2D math, so a stored offset from an older
-// version is discarded once and the user is prompted to re-zero.
-const CALIBRATION_VERSION = 1
+// Current calibration schema version. A stored offset from an older version is
+// discarded once and the user is prompted to re-zero.
+//   1 — the 3D angle switch invalidated offsets captured under the old 2D math.
+//   2 — the per-joint angle convention (see JOINT_ANGLE_CONVENTION in angle.js)
+//       rescaled the shoulder and ankle. A shoulder offset captured under the
+//       old inverted scale was ~165°, at the very top of the range; carried
+//       over, it would put every subsequent reading far below zero.
+export const CALIBRATION_VERSION = 2
 
 export class CalibrationManager {
   constructor() {
     const settings = loadSettings()
 
     if ((settings.calibration_version ?? 0) < CALIBRATION_VERSION) {
-      // Stale (2D-era) offset — clear it once and record the new version so
-      // this only happens on the first run after the upgrade.
-      this._offset = 0
-      saveSettings({ calibration_offset: 0, calibration_version: CALIBRATION_VERSION })
+      // Stale offset — clear it once and record the new version so this only
+      // happens on the first run after the upgrade.
+      this._offset   = 0
+      this._captured = false
+      saveSettings({
+        calibration_offset:   0,
+        calibration_version:  CALIBRATION_VERSION,
+        calibration_captured: false,
+      })
     } else {
-      this._offset = settings.calibration_offset ?? 0
+      this._offset   = settings.calibration_offset ?? 0
+      this._captured = settings.calibration_captured ?? false
     }
 
     this._sampling      = false
@@ -64,9 +79,13 @@ export class CalibrationManager {
   get offset() { return this._offset }
 
   /**
-   * Whether calibration has been set (non-zero offset captured).
+   * Whether an offset has been captured.
+   *
+   * Tracked explicitly rather than inferred from `offset !== 0`: a captured
+   * offset of exactly 0.0 is legitimate (the joint really was at neutral), and
+   * inferring it reported that as "Not zeroed — tap Set Zero".
    */
-  get isCalibrated() { return this._offset !== 0 }
+  get isCalibrated() { return this._captured }
 
   /**
    * Whether we are currently sampling frames for a new calibration.
@@ -81,18 +100,22 @@ export class CalibrationManager {
   get sampleTarget() { return SAMPLE_COUNT }
 
   /**
-   * Apply the calibration offset to a raw flexion angle.
-   * Returns the clinically meaningful flexion angle (0 = straight).
+   * Apply the calibration offset to a raw clinical angle.
+   * Returns the angle relative to the captured neutral (0 = neutral).
    *
-   * @param {number|null} rawFlexionAngle - from toFlexionAngle()
+   * The result is SIGNED. Negative means the joint is past neutral in the
+   * extension direction, which is a measurement — not an error to be swallowed.
+   * This used to clamp at 0, which discarded the entire extension side of the
+   * zero point: an extension test read a flat 0° for its whole duration, and
+   * because this same value feeds the readout, the overlay, the snapshots and
+   * SessionRecorder, the saved session recorded a range of motion of 0°.
+   *
+   * @param {number|null} rawAngle - from toClinicalAngle()
    * @returns {number|null}
    */
-  apply(rawFlexionAngle) {
-    if (rawFlexionAngle === null || rawFlexionAngle === undefined) return null
-    // Raw flexion at neutral = offset.
-    // Flexion relative to neutral = raw - offset.
-    // Clamp to 0 minimum — negative flexion (hyperextension) shown as 0.
-    return Math.max(0, rawFlexionAngle - this._offset)
+  apply(rawAngle) {
+    if (rawAngle === null || rawAngle === undefined) return null
+    return rawAngle - this._offset
   }
 
   /**
@@ -140,8 +163,9 @@ export class CalibrationManager {
    * Readings will be raw flexion angles again.
    */
   clear() {
-    this._offset = 0
-    saveSettings({ calibration_offset: 0 })
+    this._offset   = 0
+    this._captured = false
+    saveSettings({ calibration_offset: 0, calibration_captured: false })
   }
 
   // ─── Private ─────────────────────────────────────────────────────────
@@ -149,10 +173,11 @@ export class CalibrationManager {
   _finalize() {
     // Average all samples for a stable offset
     const avg = this._samples.reduce((a, b) => a + b, 0) / this._samples.length
-    this._offset  = Math.round(avg * 10) / 10   // 1 decimal place
+    this._offset   = Math.round(avg * 10) / 10   // 1 decimal place
+    this._captured = true
 
     // Persist to localStorage
-    saveSettings({ calibration_offset: this._offset })
+    saveSettings({ calibration_offset: this._offset, calibration_captured: true })
 
     this._sampling = false
     const cb = this._onComplete

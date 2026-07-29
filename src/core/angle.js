@@ -95,6 +95,68 @@ export function toFlexionAngle(interiorAngle) {
 }
 
 /**
+ * Per-joint mapping from the geometric interior angle to the clinical angle.
+ *
+ * WHY THIS IS NOT ONE FORMULA:
+ * `180 - interior` assumes the joint's neutral position is COLLINEAR — true for
+ * the knee, hip and elbow, where a straight limb puts the three landmarks in a
+ * line. It is not true everywhere:
+ *
+ *   - Shoulder is measured elbow → shoulder → hip. With the arm hanging at the
+ *     side, BOTH vectors point downward, so the interior angle is ~15°, and it
+ *     grows to ~180° as the arm is raised overhead. The interior angle IS the
+ *     clinical elevation. Applying `180 - interior` inverted the entire scale:
+ *     an arm at the side read 165°, and an arm raised overhead read ~20° — which
+ *     the app then labelled "peak extension".
+ *
+ *   - Ankle is measured shin midpoint → ankle → foot index. Anatomical neutral
+ *     is a right angle between shin and foot, so its neutral interior is 90°.
+ *
+ * `sign` is the direction the clinical value moves as the interior angle grows.
+ * The result is signed: negative means past neutral in the extension direction
+ * (dorsiflexion is the positive direction at the ankle, by convention).
+ */
+export const JOINT_ANGLE_CONVENTION = {
+  knee:     { neutralInterior: 180, sign: -1 },  // clinical = 180 - interior
+  hip:      { neutralInterior: 180, sign: -1 },
+  elbow:    { neutralInterior: 180, sign: -1 },
+  shoulder: { neutralInterior: 0,   sign:  1 },  // clinical = interior (elevation)
+  ankle:    { neutralInterior: 90,  sign: -1 },  // clinical = 90 - interior
+}
+
+// Joints not in the table fall back to the hinge convention.
+const DEFAULT_CONVENTION = JOINT_ANGLE_CONVENTION.knee
+
+/**
+ * Convert a geometric interior angle to the clinical angle for `joint`.
+ *
+ * @param {number|null} interiorAngle - from jointAngle()
+ * @param {string}      joint         - 'knee' | 'hip' | 'shoulder' | 'elbow' | 'ankle'
+ * @returns {number|null} clinical angle; 0 = neutral, negative = extension
+ */
+export function toClinicalAngle(interiorAngle, joint) {
+  if (interiorAngle === null || interiorAngle === undefined) return null
+  const c = JOINT_ANGLE_CONVENTION[joint] ?? DEFAULT_CONVENTION
+  return c.neutralInterior + c.sign * interiorAngle
+}
+
+/**
+ * Exact inverse of toClinicalAngle(). The overlay draws its arc from the
+ * geometric angle but must label it with the clinical value the readout shows,
+ * so it needs to convert back without recomputing from landmarks — which would
+ * bypass the filter chain and put a second, different number on screen.
+ *
+ * @param {number|null} clinicalAngle
+ * @param {string}      joint
+ * @returns {number|null} interior angle
+ */
+export function toInteriorAngle(clinicalAngle, joint) {
+  if (clinicalAngle === null || clinicalAngle === undefined) return null
+  const c = JOINT_ANGLE_CONVENTION[joint] ?? DEFAULT_CONVENTION
+  return (clinicalAngle - c.neutralInterior) / c.sign
+}
+
+/**
  * AngleSmoother — reduces frame-to-frame jitter using a moving average.
  *
  * Raw ArUco detection gives ±3–8° noise even on stationary markers.
