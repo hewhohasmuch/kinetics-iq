@@ -47,14 +47,26 @@ Each detection frame at 10Hz follows this pipeline:
 PoseDetector.detect(videoElement)   [MediaPipe BlazePose Full, CDN-loaded]
   → getJointPoints3D(markers) ?? getJointPoints(markers)  [prefer 3D world-space landmarks; fall back to 2D pixel points if any marker lacks world data]
   → jointAngle(proximal, joint, distal)  [interior angle at selected joint in degrees; uses x/y/z when present, reduces to 2D math otherwise]
-  → toFlexionAngle()              [180 - interior = clinical flexion: 0° = straight]
+  → toClinicalAngle(interior, joint)     [per-joint mapping to clinical degrees: 0° = neutral]
   → MedianFilter3.push()          [median of last 3 — rejects single-frame landmark glitches]
   → OneEuroFilter.push(v, t)      [adaptive smoothing: calm at rest, responsive when moving]
-  → CalibrationManager.apply()    [subtract offset captured at "zero" position]
+  → CalibrationManager.apply()    [subtract offset captured at "zero" position; SIGNED]
   → SessionRecorder.record()      [accumulate during active recording]
 ```
 
-3D world landmarks (meters, relative to the hip midpoint) make the angle immune to camera-perspective foreshortening. Because the 3D switch changes the math, `CalibrationManager` tracks a `calibration_version` in settings and discards a stale (2D-era) offset once on upgrade, prompting the user to re-zero.
+**Per-joint angle convention (`JOINT_ANGLE_CONVENTION` in `angle.js`).** There is no single formula from interior angle to clinical angle. `180 - interior` assumes the joint's neutral is collinear — true for knee/hip/elbow, false elsewhere:
+
+| Joint | Landmarks | Neutral interior | Clinical mapping |
+|---|---|---|---|
+| Knee / Hip / Elbow | hinge, straight at neutral | 180° | `180 - interior` |
+| Shoulder | elbow → shoulder → hip | ~15° (both vectors point *down*) | `interior` (arm elevation) |
+| Ankle | shin midpoint → ankle → foot | 90° | `90 - interior` (dorsiflexion +) |
+
+Applying the hinge rule globally **inverted the shoulder scale**: an arm at the side read 165° and an arm raised overhead read ~20°, which the UI then labelled "peak extension". `toInteriorAngle()` is the exact inverse, used by the overlay to draw its arc from the same smoothed value the readout shows.
+
+**Angles are signed.** Negative means past the calibration zero in the extension direction. `CalibrationManager.apply()` used to clamp at 0, which discarded the entire extension side of the zero point — an extension test read a flat 0° for its whole duration, and because that value also feeds the recorder, the session saved a ROM of 0. Do not reintroduce a floor: extension is the measurement. Anything consuming the angle (readout, chart axes, e2e regexes) must handle a minus sign.
+
+3D world landmarks (meters, relative to the hip midpoint) make the angle immune to camera-perspective foreshortening. Because the 3D switch changes the math, `CalibrationManager` tracks a `calibration_version` in settings and discards a stale offset once on upgrade, prompting the user to re-zero. Bump it for any change that rescales the raw angle — version 2 covers the per-joint convention, without which a shoulder offset captured under the old inverted scale (~165°, the top of the range) would push every later reading far below zero. `isCalibrated` is tracked with an explicit `calibration_captured` flag, not inferred from `offset !== 0`: a captured offset of exactly 0.0 is legitimate.
 
 **One value, everywhere.** The output of this chain feeds the big readout, the overlay label, the peak/min snapshots *and* `SessionRecorder` — deliberately the same number, not parallel streams. `_captureFrameTo()` composites the overlay canvas into the retained extreme-frame canvas, so a divergence would put two contradicting angles inside one patient record with the wrong one burned into the image. Two consequences for anyone changing `_runDetection()`:
 
@@ -113,7 +125,7 @@ Keys: `rom_sessions` (Session[]), `rom_settings` (Settings), `rom_patients` (Pat
 
 `migrateInlineImages()` runs once on boot to rescue pre-IndexedDB sessions: it converts any inline `peakFrame`/`minFrame` base64 data URL into an `imageStore` blob, queues its upload, and strips the field — immediately relieving a full localStorage and backing up images that were previously local-only.
 
-Sessions have separate `joint` (knee/hip/shoulder/elbow/ankle) and `side` (left/right) fields, plus `position` (prone/supine/seated), `angleMode` ('3d', absent = pre-3D/2D-era), `angleFilter` ('euro1', absent = pre-fix), and `peakFramePath`/`minFramePath` (Storage object paths, null until the snapshot uploads; image bytes are never stored on the session). Old sessions saved before the joint/side split had `joint: 'knee_right'` (combined) and no `side` field — the UI handles both shapes gracefully. **Sessions without `angleFilter` read systematically low at the extremes** (the old moving average clipped peaks), so their `rom` is not comparable with a `'euro1'` session's — the difference would look like patient progress but is the filter change. Stamp a new value on this field for any future change that alters the measured numbers. Sessions belong to a `patient_id`; `getActivePatientId()`/`setActivePatientId()` in settings track which patient Measure/History currently operate on (switching patient also clears the calibration offset, same rule as switching joint/side).
+Sessions have separate `joint` (knee/hip/shoulder/elbow/ankle) and `side` (left/right) fields, plus `position` (prone/supine/seated), `angleMode` ('3d', absent = pre-3D/2D-era), `angleFilter` ('euro1', absent = pre-fix), `angleConvention` ('perjoint1', absent = pre-per-joint-convention), and `peakFramePath`/`minFramePath` (Storage object paths, null until the snapshot uploads; image bytes are never stored on the session). Old sessions saved before the joint/side split had `joint: 'knee_right'` (combined) and no `side` field — the UI handles both shapes gracefully. **Sessions without `angleFilter` read systematically low at the extremes** (the old moving average clipped peaks), so their `rom` is not comparable with a `'euro1'` session's — the difference would look like patient progress but is the filter change. **Sessions without `angleConvention` are worse:** their shoulder values are on an inverted scale, their ankle values are offset by 90°, and any of them recorded after a Set Zero had everything below the zero point clamped to 0. Those numbers are **not recoverable** — the calibration offset was never stored on the session, and clamped samples are gone — so they were deliberately left untouched rather than migrated. Stamp a new value on whichever of these fields applies for any future change that alters the measured numbers. Sessions belong to a `patient_id`; `getActivePatientId()`/`setActivePatientId()` in settings track which patient Measure/History currently operate on (switching patient also clears the calibration offset, same rule as switching joint/side).
 
 ### Separation of concerns
 

@@ -232,7 +232,10 @@ export class SessionDetailView {
                 callback: v => `${v}°`,
               },
               grid:    { color: 'rgba(255,255,255,0.04)' },
-              min:     0,
+              // Floor at 0 for a normal flexion sweep, but drop below it when
+              // the session actually went into extension — a hard min of 0
+              // clipped negative values off the bottom of the chart entirely.
+              suggestedMin: Math.min(0, Math.floor((Math.min(...timeline) - 10) / 10) * 10),
               suggestedMax: Math.ceil((Math.max(...timeline) + 10) / 10) * 10,
             }
           },

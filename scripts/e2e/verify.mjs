@@ -101,7 +101,7 @@ async function main() {
     await context.addInitScript(([patient]) => {
       localStorage.setItem('rom_patients', JSON.stringify([patient]))
       localStorage.setItem('rom_settings', JSON.stringify({
-        active_patient_id: patient.id, calibration_offset: 0, calibration_version: 1,
+        active_patient_id: patient.id, calibration_offset: 0, calibration_version: 2,
       }))
       localStorage.setItem('rom_sessions', JSON.stringify([]))
       localStorage.setItem('rom_outbox', JSON.stringify([]))
@@ -138,8 +138,10 @@ async function main() {
 
     console.log('\n2. Camera + MediaPipe')
     await page.click('#btn-start-camera')
+    // -? matters: past the calibration zero point the readout is negative
+    // (extension), and a \d-only pattern would wait here forever.
     await page.waitForFunction(
-      () => /^\d+°$/.test(document.getElementById('angle-display')?.textContent ?? ''),
+      () => /^-?\d+°$/.test(document.getElementById('angle-display')?.textContent ?? ''),
       null, { timeout: 180_000 },
     )
     pass(`pose detected, readout = ${await page.textContent('#angle-display')}`)

@@ -105,6 +105,13 @@ export class SessionRecorder {
       // extremes — do not compare their ROM against 'euro1' sessions as if the
       // difference were the patient's.
       angleFilter:   'euro1',
+      // Angle convention generation. Sessions without this field were measured
+      // with a single `180 - interior` rule applied to every joint, which
+      // inverted the shoulder scale and offset the ankle by 90°, and whose
+      // calibration clamped away everything below the zero point. Their
+      // shoulder/ankle numbers are not comparable with 'perjoint1' sessions —
+      // and are not recoverable, since the offset used was never stored.
+      angleConvention: 'perjoint1',
       notes:         '',
       app_version:   '0.1.0',
       // Supabase Storage paths for the two overlay snapshots. Null until the

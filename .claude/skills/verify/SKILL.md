@@ -27,6 +27,7 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 
 - Seed `rom_patients` + `rom_settings` (`active_patient_id`) via `addInitScript` to boot straight into MeasureView; recording is blocked without an active patient.
 - Key ids: `#btn-start-camera`, `#angle-display` (readout, `--°` until pose found), `#btn-calibrate` (Set Zero, ~2s sampling), `#btn-record-start/stop`, `#btn-notes-skip`, `#btn-history`, `.session-row`, `#btn-signout`, `#btn-new-patient`, `#pf-name`, `.form-save`, login: `#login-email/password/submit`.
-- Model + first detection takes 30–90s headless; wait on `#angle-display` matching `/^\d+°$/` with a generous timeout.
+- Model + first detection takes 30–90s headless; wait on `#angle-display` matching `/^-?\d+°$/` with a generous timeout. The `-?` is required — once Set Zero has been tapped, anything past the zero point in the extension direction renders negative.
+- `#btn-calibrate` sampling ends on its own after 20 detection frames, which headless (~2Hz) stretches to ~10–20s. Wait for its label to return to `Set Zero` rather than a fixed timeout, then read `#cal-status`.
 - SessionDetail's Chart.js has a 400ms entry animation — screenshot too early and the timeline line renders near zero; wait ~1s after the view mounts.
 - The overlay angle label is canvas-drawn; assert it by screenshotting and reading the image, not via DOM.

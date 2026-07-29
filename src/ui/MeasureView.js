@@ -5,7 +5,7 @@
 import { Camera }            from '../detection/camera.js'
 import { PoseDetector }      from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
-import { jointAngle, toFlexionAngle, MedianFilter3, OneEuroFilter } from '../core/angle.js'
+import { jointAngle, toClinicalAngle, toInteriorAngle, MedianFilter3, OneEuroFilter } from '../core/angle.js'
 import { SessionRecorder }   from '../core/session.js'
 import { saveSession, getActivePatientId, getPatient, enqueueImageUpload } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
@@ -951,7 +951,10 @@ export class MeasureView {
       if (points) {
         const interior = jointAngle(points.proximal, points.joint, points.distal)
         if (interior !== null) {
-          rawFlexion = toFlexionAngle(interior)
+          // Per-joint convention: the shoulder's neutral interior angle is ~0°
+          // and the ankle's is 90°, so a single `180 - interior` rule inverts
+          // the shoulder scale and offsets the ankle. See angle.js.
+          rawFlexion = toClinicalAngle(interior, this._joint)
         }
       }
     }
@@ -978,11 +981,17 @@ export class MeasureView {
     }
 
     // ── Overlay ────────────────────────────────────────────────────
-    // The overlay label must show the same smoothed + calibrated value as
-    // the readout below the camera; it un-inverts internally (180 - x).
+    // The arc is drawn from the geometric angle, but the LABEL must be the
+    // exact value the readout shows — passed through explicitly rather than
+    // re-derived, so the two can never disagree. Converting back via
+    // toInteriorAngle keeps the arc on the smoothed value instead of the raw
+    // landmarks, which would visibly jitter against a calm readout.
     const videoDims = this.camera.getDimensions()
     this.overlay.resize(videoDims.width, videoDims.height)
-    this.overlay.draw(markers, displayAngle !== null ? 180 - displayAngle : null, { joint: this._joint })
+    this.overlay.draw(markers, toInteriorAngle(displayAngle, this._joint), {
+      joint:      this._joint,
+      labelAngle: displayAngle,
+    })
 
     // ── Extreme snapshots ──────────────────────────────────────────
     // Must come AFTER overlay.draw() for this frame. The snapshot composites

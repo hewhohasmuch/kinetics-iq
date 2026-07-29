@@ -21,7 +21,8 @@ vi.mock('./storage.js', () => ({
   loadSettings: vi.fn(() => ({ calibration_offset: 0 })),
 }))
 
-const { CalibrationManager } = await import('./calibration.js')
+const { loadSettings } = await import('./storage.js')
+const { CalibrationManager, CALIBRATION_VERSION } = await import('./calibration.js')
 
 describe('CalibrationManager', () => {
 
@@ -52,9 +53,24 @@ describe('CalibrationManager', () => {
     expect(cal.apply(10)).toBe(0)
   })
 
-  it('apply() clamps to 0 minimum (no negative flexion)', () => {
+  // Previously this clamped at 0 ("no negative flexion"). That clamp discarded
+  // the entire extension side of the zero point, so an extension measurement
+  // read a flat 0° for its whole duration — and since the same value feeds the
+  // recorder and the snapshots, the saved ROM was 0 too. Extension is the
+  // measurement, not an error: it must survive as a negative number.
+  it('apply() returns negative values below the zero point (extension)', () => {
     cal._offset = 15
-    expect(cal.apply(10)).toBe(0)   // 10 - 15 = -5 → clamped to 0
+    expect(cal.apply(10)).toBe(-5)
+    expect(cal.apply(0)).toBe(-15)
+  })
+
+  it('apply() does not flatten a movement that stays below the offset', () => {
+    // The reported bug: Set Zero at the shoulder captured an offset near the
+    // top of the scale, and every later sample sat below it.
+    cal._offset = 165
+    const outputs = [165, 140, 100, 60, 20].map(v => cal.apply(v))
+    expect(new Set(outputs).size).toBe(outputs.length)  // all distinct, none pinned
+    expect(Math.min(...outputs)).toBeLessThan(0)
   })
 
   it('apply() returns null for null input', () => {
@@ -126,6 +142,45 @@ describe('CalibrationManager', () => {
   it('does not accept samples when not sampling', () => {
     cal.addSample(90)   // not sampling — should be ignored
     expect(cal.sampleProgress).toBe(0)
+  })
+
+  // A captured offset of exactly 0.0 is legitimate (a joint genuinely at its
+  // neutral). Inferring "calibrated" from `offset !== 0` reported that as
+  // "Not zeroed — tap Set Zero", so the state must be tracked explicitly.
+  it('isCalibrated is true after capturing an offset of exactly 0', () => {
+    cal.startSampling(() => {})
+    for (let i = 0; i < 20; i++) cal.addSample(0)
+
+    expect(cal.offset).toBe(0)
+    expect(cal.isCalibrated).toBe(true)
+  })
+
+  // ─── Schema version ──────────────────────────────────────────────────
+
+  it('discards an offset captured under an older convention', () => {
+    // A shoulder offset of ~165 captured under the old inverted scale would
+    // put the whole range below zero if carried over.
+    loadSettings.mockReturnValueOnce({
+      calibration_offset:  165.4,
+      calibration_version: 1,
+      calibration_captured: true,
+    })
+
+    const stale = new CalibrationManager()
+    expect(stale.offset).toBe(0)
+    expect(stale.isCalibrated).toBe(false)
+  })
+
+  it('keeps an offset captured under the current version', () => {
+    loadSettings.mockReturnValueOnce({
+      calibration_offset:   12.5,
+      calibration_version:  CALIBRATION_VERSION,
+      calibration_captured: true,
+    })
+
+    const fresh = new CalibrationManager()
+    expect(fresh.offset).toBe(12.5)
+    expect(fresh.isCalibrated).toBe(true)
   })
 
 })
