@@ -444,6 +444,7 @@ git commit -m "Return the head region from PoseDetector.detect()"
 
 **Files:**
 - Modify: `src/detection/overlay.js` (constructor lines 38–47; `attach()` lines 49–52; `draw()` lines 124–183)
+- Create: `src/detection/overlay.test.js`
 
 **Interfaces:**
 - Consumes: `redactionGeometry()` and `BLUR_RADIUS_FACTOR` from Task 1; the `head` object from Task 2.
@@ -451,7 +452,7 @@ git commit -m "Return the head region from PoseDetector.detect()"
   - `Overlay.draw(markers, interiorAngle, opts)` now honours `opts.head` and `opts.video`.
   - `Overlay.redactionMode` getter → `'blur1' | 'solid1'`. Used by Task 6.
 
-`src/ui/` and `src/detection/` have no unit tests in this repo; this task is covered by the e2e assertion in Task 7 and by on-device checking. Verify it by running the app, not by reading the diff.
+**Test scope.** `overlay.js` has no test file today, though `src/detection/` does have test infrastructure (`pose.test.js`). The canvas drawing itself needs real pixels and is covered by the e2e assertion in Task 7 plus the on-device pass — a call-order mock would pass while the image still leaked. But the **blur-vs-solid fallback decision** is a load-bearing safety property (Global Constraint: *degradation is blur → solid, never blur → nothing*), it is pure logic, and it is testable in Node by stubbing `global.document` — the same pattern `calibration.test.js` uses for `global.localStorage`. So that branch gets a real test; the drawing does not.
 
 - [ ] **Step 1: Add the import and the constructor state**
 
@@ -613,10 +614,83 @@ Also extend the `draw()` JSDoc:
  * @param {HTMLVideoElement|null} [opts.video] - source for the blurred patch
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Test the fallback decision**
+
+Create `src/detection/overlay.test.js`. Tests run in Node with no DOM, so `document` is stubbed. The key case is the **silent no-op**: where Canvas 2D filters are unsupported, assigning `ctx.filter` leaves the property at `'none'` rather than throwing — which is exactly why this must be probed rather than assumed.
+
+```js
+import { describe, it, expect, afterEach } from 'vitest'
+import { Overlay } from './overlay.js'
+
+/**
+ * Stub `document.createElement('canvas').getContext('2d')` with a context whose
+ * `filter` setter either sticks or silently no-ops, mimicking a browser with
+ * and without Canvas 2D filter support.
+ */
+function stubDocument({ filterSupported }) {
+  global.document = {
+    createElement: () => ({
+      getContext: () => {
+        const ctx = { _filter: 'none' }
+        Object.defineProperty(ctx, 'filter', {
+          get() { return this._filter },
+          set(v) { if (filterSupported) this._filter = v },
+        })
+        return ctx
+      },
+    }),
+  }
+}
+
+const fakeCanvas = { getContext: () => ({}) }
+
+afterEach(() => { delete global.document })
+
+describe('Overlay redaction mode', () => {
+  it('reports blur1 where Canvas 2D filters are supported', () => {
+    stubDocument({ filterSupported: true })
+    const overlay = new Overlay()
+    overlay.attach(fakeCanvas)
+    expect(overlay.redactionMode).toBe('blur1')
+  })
+
+  it('falls back to solid1 when assigning ctx.filter silently no-ops', () => {
+    // Safari before 17. The assignment does not throw — it just does nothing,
+    // which is why an unguarded blur draw would emit a SHARP face.
+    stubDocument({ filterSupported: false })
+    const overlay = new Overlay()
+    overlay.attach(fakeCanvas)
+    expect(overlay.redactionMode).toBe('solid1')
+  })
+
+  it('falls back to solid1 when there is no DOM at all', () => {
+    const overlay = new Overlay()
+    overlay.attach(fakeCanvas)
+    expect(overlay.redactionMode).toBe('solid1')
+  })
+
+  it('never reports a mode implying no redaction', () => {
+    for (const filterSupported of [true, false]) {
+      stubDocument({ filterSupported })
+      const overlay = new Overlay()
+      overlay.attach(fakeCanvas)
+      expect(['blur1', 'solid1']).toContain(overlay.redactionMode)
+    }
+  })
+})
+```
+
+- [ ] **Step 6: Run the tests**
+
+Run: `npx vitest run src/detection/overlay.test.js`
+Expected: PASS, 4 tests.
+
+If `_detectFilterSupport()` throws rather than returning `false` when `document` is undefined, the third test catches it — the `try/catch` in Step 2 is what makes that case return `solid1` instead of exploding.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/detection/overlay.js
+git add src/detection/overlay.js src/detection/overlay.test.js
 git commit -m "Blur the head region into the overlay canvas"
 ```
 
