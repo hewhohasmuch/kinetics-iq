@@ -100,6 +100,9 @@ export function headRegion(landmarksNorm, videoW, videoH) {
   const cx = faceX + upX * (CRANIUM_NUDGE * r)
   const cy = faceY + upY * (CRANIUM_NUDGE * r)
 
+  // Reject NaN or infinite values.
+  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(r)) return null
+
   // No head in the picture → nothing to redact.
   if (cx + r < 0 || cx - r > videoW || cy + r < 0 || cy - r > videoH) return null
 

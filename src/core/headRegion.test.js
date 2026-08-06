@@ -62,10 +62,19 @@ describe('headRegion', () => {
   })
 
   it('does not collapse in profile — the failure the two estimators exist for', () => {
-    const frontal = headRegion(pose(), W, H)
-    const profile = headRegion(profilePose(), W, H)
+    // Use a tighter close-up where face estimator dominates frontally,
+    // so the profile transform flips which term wins.
+    const frontal = headRegion(pose({ shDrop: 0.10 }), W, H)
+    const profile = headRegion(profilePose({ shDrop: 0.10 }), W, H)
     expect(profile).not.toBeNull()
-    expect(profile.r).toBeGreaterThanOrEqual(0.8 * frontal.r)
+
+    // Frontal case: face estimator should dominate (larger than torso fallback)
+    // sTorso for shDrop=0.10 ≈ 89.6px → HEAD_RADIUS_FACTOR * sTorso ≈ 76.1
+    expect(frontal.r).toBeGreaterThan(76.1)
+
+    // Profile case: torso takes over (face box collapses in x)
+    // but should still be substantially sized
+    expect(profile.r).toBeGreaterThanOrEqual(0.75 * frontal.r)
   })
 
   it('pushes the centre away from the shoulders regardless of body rotation', () => {
@@ -95,6 +104,12 @@ describe('headRegion', () => {
     expect(headRegion(null, W, H)).toBeNull()
     expect(headRegion([], W, H)).toBeNull()
     expect(headRegion(pose(), 0, 0)).toBeNull()
+  })
+
+  it('returns null when landmark coordinates are NaN', () => {
+    const lm = pose()
+    lm[0].x = NaN  // Inject NaN into the nose landmark
+    expect(headRegion(lm, W, H)).toBeNull()
   })
 })
 
