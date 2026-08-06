@@ -13,6 +13,7 @@ import {
   jointAngle, toFlexionAngle, AngleSmoother, applyCalibration, DeadZoneFilter,
   MedianFilter3, OneEuroFilter,
   JOINT_ANGLE_CONVENTION, toClinicalAngle, toInteriorAngle,
+  JOINT_MOTION_TERMS, motionTerms,
 } from './angle.js'
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
@@ -583,5 +584,50 @@ describe('per-joint clinical angle convention', () => {
   it('passes null through untouched', () => {
     expect(toClinicalAngle(null, 'knee')).toBeNull()
     expect(toInteriorAngle(null, 'knee')).toBeNull()
+  })
+})
+
+// ─── Clinical motion terms ────────────────────────────────────────────────────
+
+describe('motionTerms()', () => {
+  it('names the hinge joints flexion / extension', () => {
+    for (const joint of ['knee', 'hip', 'elbow']) {
+      expect(motionTerms(joint)).toEqual({ positive: 'flexion', negative: 'extension' })
+    }
+  })
+
+  it('names shoulder motion elevation, not flexion', () => {
+    // The whole point: an arm-at-side frame used to be captioned "peak
+    // extension" because every joint borrowed the knee's vocabulary.
+    expect(motionTerms('shoulder').positive).toBe('elevation')
+  })
+
+  it('names ankle motion dorsiflexion / plantarflexion', () => {
+    expect(motionTerms('ankle')).toEqual({
+      positive: 'dorsiflexion',
+      negative: 'plantarflexion',
+    })
+  })
+
+  it('resolves the legacy combined joint_side form', () => {
+    // Sessions saved before the joint/side split store joint: 'shoulder_left'.
+    // Without the split these fall back to the hinge terms and read "flexion".
+    expect(motionTerms('shoulder_left')).toEqual(motionTerms('shoulder'))
+    expect(motionTerms('knee_right')).toEqual(motionTerms('knee'))
+    expect(motionTerms('ankle_left')).toEqual(motionTerms('ankle'))
+  })
+
+  it('falls back to the hinge terms for an unknown or missing joint', () => {
+    expect(motionTerms('wrist')).toEqual(motionTerms('knee'))
+    expect(motionTerms(undefined)).toEqual(motionTerms('knee'))
+    expect(motionTerms(null)).toEqual(motionTerms('knee'))
+  })
+
+  it('covers every joint that has an angle convention', () => {
+    // The two tables must not drift apart: a joint that can be measured must
+    // also be nameable.
+    for (const joint of Object.keys(JOINT_ANGLE_CONVENTION)) {
+      expect(JOINT_MOTION_TERMS[joint]).toBeDefined()
+    }
   })
 })

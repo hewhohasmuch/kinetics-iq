@@ -11,6 +11,7 @@
  */
 
 import { deleteSession } from '../core/storage.js'
+import { motionTerms } from '../core/angle.js'
 import { getImage, cacheUploaded } from '../core/imageStore.js'
 import { getClient, isConfigured } from '../core/supabase.js'
 import { Chart } from 'chart.js/auto'
@@ -106,9 +107,18 @@ export class SessionDetailView {
     const framesEl = document.getElementById('detail-frames')
     if (!framesEl) return
 
+    // The motion is named per joint — a shoulder elevates, an ankle dorsiflexes.
+    // The min frame is only the NEGATIVE motion when the value actually crossed
+    // the zero point; an un-zeroed shoulder resting at 24.6° of elevation was
+    // being captioned "Peak extension: 24.6°", which it is not. Both captions
+    // keep the signed value the overlay burned into the image — an abs() here
+    // would put two different numbers on one picture.
+    const terms   = motionTerms(s.joint)
+    const minTerm = s.min < 0 ? `Peak ${terms.negative}` : `Min ${terms.positive}`
+
     const specs = [
-      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `Peak flexion: ${s.max}°` },
-      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `Peak extension: ${s.min}°` },
+      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `Peak ${terms.positive}: ${s.max}°` },
+      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `${minTerm}: ${s.min}°` },
     ]
 
     let shown = 0
@@ -117,7 +127,9 @@ export class SessionDetailView {
       if (!fig) continue
       const url = await this._resolveFrameUrl(s.id, spec.which, spec.path)
       if (url) {
-        fig.querySelector('img').src = url
+        const img = fig.querySelector('img')
+        img.src = url
+        img.alt = `${spec.caption} pose`
         fig.querySelector('.peak-frame-caption').textContent = spec.caption
         fig.style.display = 'block'
         shown++
@@ -178,6 +190,10 @@ export class SessionDetailView {
       return t % 5 === 0 || i === 0 ? `${Math.round(t)}s` : ''
     })
 
+    // Axis is named for the joint's positive motion, not a blanket "Flexion".
+    const motion    = motionTerms(this.session?.joint).positive
+    const axisLabel = `${motion.charAt(0).toUpperCase()}${motion.slice(1)} (°)`
+
     // Load Chart.js dynamically if not already available.
     // innerHTML does not execute <script> tags — we must use this approach.
     if (this._chart) this._chart.destroy()
@@ -189,7 +205,7 @@ export class SessionDetailView {
         data: {
           labels,
           datasets: [{
-            label: 'Flexion (°)',
+            label: axisLabel,
             data:  timeline,
             borderColor:     '#4ade80',
             backgroundColor: 'rgba(74,222,128,0.08)',
@@ -330,12 +346,13 @@ export class SessionDetailView {
         <div id="detail-frames" class="peak-frame-section" style="display:none">
           <div class="chart-section-label">Range of motion frames</div>
           <div class="rom-frames">
+            <!-- alt is set from the per-joint caption in _renderFrames() -->
             <figure id="frame-max" class="rom-frame" style="display:none">
-              <img class="peak-frame-img" alt="Peak flexion pose" />
+              <img class="peak-frame-img" alt="Range of motion frame" />
               <div class="peak-frame-caption"></div>
             </figure>
             <figure id="frame-min" class="rom-frame" style="display:none">
-              <img class="peak-frame-img" alt="Peak extension pose" />
+              <img class="peak-frame-img" alt="Range of motion frame" />
               <div class="peak-frame-caption"></div>
             </figure>
           </div>
