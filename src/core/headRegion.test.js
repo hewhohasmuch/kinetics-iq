@@ -70,19 +70,24 @@ describe('headRegion', () => {
 
     // The fixture parameters yield:
     //   Face centroid y ≈ 0.2470909 (not 0.25, because landmarks cluster at eye line)
-    //   For shDrop=0.10: d_px ≈ 131.724 → sTorso ≈ 92.21px → torso-only r ≈ 78.38px
-    //   With sFace ≈ 112.26px → frontal.r ≈ 95.42px (face dominates)
+    //   For shDrop=0.10: d_px ≈ 131.724 → sTorso ≈ 92.21px
+    //   With sFace ≈ 112.26px → frontal.r ≈ 95.42px (face wins)
     //
-    // Both assertions are load-bearing:
-    //   - delete sFace (force scale=sTorso) → frontal.r becomes 78.38, outside [90,100] → caught
-    //   - delete sTorso (force scale=sFace) → profile.r becomes 95.42, ratio 1.0 >= 0.75 ✓
-    //     but profile then lacks rotation-invariance: ratio ≥ 0.75 catches the torso deletion
+    // Both assertions are load-bearing; each catches a different mutation:
     //
-    // Frontal: face estimator must produce this radius (not the torso-only fallback)
+    //   Mutation A — delete sFace (scale=sTorso):
+    //     frontal.r = 0.85 × 92.21 = 78.38px, profile.r = 78.38px (ratio 1.0)
+    //     band assertion (90 < r < 100) catches it
+    //
+    //   Mutation B — delete sTorso (scale=sFace):
+    //     frontal.r = 95.42px (unchanged, sFace already dominated), profile.r = 61.91px (ratio 0.649)
+    //     ratio assertion (>= 0.75) catches it
+    //
+    // Band assertion: pin the face estimator in use for frontal
     expect(frontal.r).toBeGreaterThan(90)
     expect(frontal.r).toBeLessThan(100)
 
-    // Profile: must not collapse; ratio must exceed the torso-only mutation case (0.649)
+    // Ratio assertion: ensure the torso fallback engages in profile
     expect(profile.r).toBeGreaterThanOrEqual(0.75 * frontal.r)
   })
 
