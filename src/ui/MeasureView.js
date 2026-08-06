@@ -958,7 +958,7 @@ export class MeasureView {
     const videoEl = this.camera.videoEl
     if (!videoEl || !this.detector.isReady) return
 
-    const { markers, allFound, head } = this.detector.detect(videoEl)
+    const { markers, allFound, head, headResolved } = this.detector.detect(videoEl)
 
     // ── Angle calculation ──────────────────────────────────────────
     let rawFlexion  = null
@@ -1025,26 +1025,41 @@ export class MeasureView {
     // frame's angle — which put a number from the opposite end of the range
     // onto the peak-extension image.
     //
-    // `head` is also required here, not just displayAngle. displayAngle is a
-    // HELD value: MedianFilter3 and OneEuroFilter both return their last
-    // output when pushed a null sample, so displayAngle stays non-null for a
-    // frame or more after MediaPipe drops the pose — but `head` (from this
-    // same dropped-pose detect() call) is null, meaning overlay.draw() above
-    // drew NO redaction into this frame. Gating on displayAngle alone would
-    // let a frame with a plainly visible, unredacted face get composited and
-    // stored during a brief pose dropout (e.g. right as Start is tapped).
-    // Skipping a snapshot here is free — the next frame retries; storing an
-    // unredacted one is not.
-    if (this.recorder.isActive && displayAngle !== null && head) {
+    // Extreme TRACKING (_maxAngle/_minAngle) must stay ungated — it has to
+    // match recorder.record() above exactly, or session.max/min (from the
+    // recorder) and the retained snapshot can end up describing two
+    // different frames. Only the CAPTURE is conditional on `headResolved`.
+    //
+    // `head === null` is ambiguous by itself: it means either (a) MediaPipe
+    // lost the pose entirely — displayAngle is a HELD value (MedianFilter3
+    // and OneEuroFilter both replay their last output on a null push), so
+    // it stays non-null while the overlay drew NO redaction this frame, and
+    // capturing here would leak a possibly-visible face — or (b) the pose is
+    // fine but the head is simply outside the video frame, which is a safe,
+    // ordinary case (e.g. ankle work, where the app's own framing hint puts
+    // the head off-screen for the whole session). `headResolved` (from
+    // headInputsFinite — landmarks 0–12 all finite) tells these apart:
+    // false only in case (a).
+    //
+    // When a new extreme lands on an unresolved frame, the previously
+    // retained frame no longer depicts the extreme (a later sample moved
+    // _maxAngle/_minAngle past it), so it's discarded (`: false`) rather
+    // than left in place under the wrong angle. An honest gap — no peak
+    // snapshot — beats a confident wrong number burned into the image.
+    if (this.recorder.isActive && displayAngle !== null) {
       // Snapshot both extremes: max flexion (most bent) and min flexion
       // (straightest). Extension tests peak at the minimum, not the maximum.
       if (displayAngle > this._maxAngle) {
         this._maxAngle    = displayAngle
-        this._maxHasFrame = this._captureFrameTo('max') || this._maxHasFrame
+        this._maxHasFrame = headResolved
+          ? (this._captureFrameTo('max') || this._maxHasFrame)
+          : false
       }
       if (displayAngle < this._minAngle) {
         this._minAngle    = displayAngle
-        this._minHasFrame = this._captureFrameTo('min') || this._minHasFrame
+        this._minHasFrame = headResolved
+          ? (this._captureFrameTo('min') || this._minHasFrame)
+          : false
       }
     }
 

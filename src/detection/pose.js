@@ -1,5 +1,5 @@
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
-import { headRegion } from '../core/headRegion.js'
+import { headRegion, headInputsFinite } from '../core/headRegion.js'
 
 const WASM_CDN  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
@@ -68,13 +68,13 @@ export class PoseDetector {
   // Returns { markers, allFound, foundIds } with centers in video pixel space.
   detect(videoElement) {
     if (!this._ready || !videoElement) {
-      return { markers: {}, allFound: false, foundIds: [], head: null }
+      return { markers: {}, allFound: false, foundIds: [], head: null, headResolved: false }
     }
 
     const result = this._landmarker.detectForVideo(videoElement, performance.now())
 
     if (!result.landmarks || result.landmarks.length === 0) {
-      return { markers: {}, allFound: false, foundIds: [], head: null }
+      return { markers: {}, allFound: false, foundIds: [], head: null, headResolved: false }
     }
 
     const lmNorm = result.landmarks[0]
@@ -111,6 +111,11 @@ export class PoseDetector {
       // it is computed from the face/shoulder landmarks, not from JOINT_CONFIG,
       // so it is present even when the measured joint is not fully visible.
       head: headRegion(lmNorm, vw, vh),
+      // Whether `head` above is trustworthy. headRegion() returning null is
+      // ambiguous on its own: it means either "no head in frame" (fine) or
+      // "inputs were unusable" (NaN/missing landmark — head could be
+      // anywhere, including in frame). headResolved disambiguates for callers.
+      headResolved: headInputsFinite(lmNorm),
     }
   }
 

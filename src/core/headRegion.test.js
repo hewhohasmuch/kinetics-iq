@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { headRegion, redactionGeometry, MAX_RADIUS_FRACTION } from './headRegion.js'
+import { headRegion, redactionGeometry, headInputsFinite, MAX_RADIUS_FRACTION } from './headRegion.js'
 
 const W = 720, H = 1280
 
@@ -123,6 +123,36 @@ describe('headRegion', () => {
   it('returns null when landmark coordinates are NaN', () => {
     const lm = pose()
     lm[0].x = NaN  // Inject NaN into the nose landmark
+    expect(headRegion(lm, W, H)).toBeNull()
+  })
+})
+
+describe('headInputsFinite', () => {
+  it('is true for a normal pose', () => {
+    expect(headInputsFinite(pose())).toBe(true)
+  })
+
+  it('is false for null or empty input', () => {
+    expect(headInputsFinite(null)).toBe(false)
+    expect(headInputsFinite([])).toBe(false)
+  })
+
+  it('is false when a face landmark has NaN x', () => {
+    const lm = pose()
+    lm[0].x = NaN
+    expect(headInputsFinite(lm)).toBe(false)
+  })
+
+  it('is false when a shoulder landmark has NaN y', () => {
+    const lm = pose()
+    lm[12].y = NaN
+    expect(headInputsFinite(lm)).toBe(false)
+  })
+
+  it('is true for a head positioned entirely outside the frame (case b: usable, nothing to redact)', () => {
+    const lm = pose({ hx: -1.5, hy: -1.5 })
+    expect(headInputsFinite(lm)).toBe(true)
+    // Sanity check this is really the off-frame case headRegion treats as null.
     expect(headRegion(lm, W, H)).toBeNull()
   })
 })

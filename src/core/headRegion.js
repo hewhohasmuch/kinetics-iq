@@ -44,6 +44,36 @@ const LEFT_SHOULDER   = 11
 const RIGHT_SHOULDER  = 12
 
 /**
+ * Whether headRegion's inputs are usable at all — i.e. whether a `null`
+ * result means "no head in the picture" (safe to skip redaction) or "we
+ * cannot tell" (unsafe: treat as if a face might be in shot).
+ *
+ * Checks indices 0–12 inclusive: the face landmarks (0–10) AND both
+ * shoulders (11, 12). The shoulders matter here even though they are not
+ * face landmarks — a NaN/missing shoulder poisons the sTorso estimate and
+ * makes headRegion() return null even with a face plainly in shot, which
+ * would otherwise be a third, silent leak path alongside a fully-dropped
+ * pose.
+ *
+ * Deliberately stricter than headRegion() strictly requires (e.g. it
+ * doesn't tolerate a missing landmark the way headRegion's `if (!lm)
+ * continue` does): healthy MediaPipe output always satisfies this, and a
+ * false negative only ever costs a skipped snapshot, never a leaked one.
+ *
+ * @param {Array<{x:number,y:number}>|null} landmarksNorm
+ * @returns {boolean}
+ */
+export function headInputsFinite(landmarksNorm) {
+  if (!landmarksNorm) return false
+  for (let i = 0; i <= RIGHT_SHOULDER; i++) {
+    const lm = landmarksNorm[i]
+    if (!lm) return false
+    if (!Number.isFinite(lm.x) || !Number.isFinite(lm.y)) return false
+  }
+  return true
+}
+
+/**
  * @param {Array<{x:number,y:number}>|null} landmarksNorm - MediaPipe normalised (0–1) landmarks
  * @param {number} videoW - intrinsic video width in pixels
  * @param {number} videoH - intrinsic video height in pixels

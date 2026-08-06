@@ -154,6 +154,12 @@ export class SessionDetailView {
    * feature shipped has the patient's face visible, and nothing in the image
    * itself makes that obvious at a glance.
    *
+   * Branched on the exact `faceRedaction` value, not just truthy/falsy —
+   * 'blur1' and 'solid1' are a real distinction (the device fell back to a
+   * solid mask, e.g. because it couldn't blur) and collapsing them into one
+   * "blurred" message would put a false statement in the patient record,
+   * which is exactly what this feature exists to prevent.
+   *
    * Deliberately not worded as anonymisation — the images stay linked to a
    * named patient, so they remain PHI either way.
    */
@@ -164,9 +170,10 @@ export class SessionDetailView {
       note.className = 'frame-redaction-note'
       framesEl.appendChild(note)
     }
-    note.textContent = s.faceRedaction
-      ? 'Face blurred at capture'
-      : 'Face not blurred — captured before redaction was added'
+    note.textContent =
+      s.faceRedaction === 'blur1'  ? 'Face blurred at capture' :
+      s.faceRedaction === 'solid1' ? 'Face masked at capture' :
+      'Face not blurred — captured before redaction was added'
     note.classList.toggle('unredacted', !s.faceRedaction)
   }
 

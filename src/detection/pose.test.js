@@ -210,6 +210,25 @@ describe('PoseDetector', () => {
     expect(result.head).not.toBeNull()
     expect(result.head.r).toBeGreaterThan(0)
   })
+
+  it('returns headResolved: true on a normal pose', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks(HEAD_POSE)] })
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(true)
+  })
+
+  it('returns headResolved: false when no landmarks are returned', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [] })
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(false)
+  })
+
+  it('returns headResolved: false before init()', () => {
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(false)
+  })
 })
 
 describe('JOINT_CONFIG', () => {
