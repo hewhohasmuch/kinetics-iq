@@ -68,12 +68,21 @@ describe('headRegion', () => {
     const profile = headRegion(profilePose({ shDrop: 0.10 }), W, H)
     expect(profile).not.toBeNull()
 
-    // Frontal case: face estimator should dominate (larger than torso fallback)
-    // sTorso for shDrop=0.10 ≈ 89.6px → HEAD_RADIUS_FACTOR * sTorso ≈ 76.1
-    expect(frontal.r).toBeGreaterThan(76.1)
+    // The fixture parameters yield:
+    //   Face centroid y ≈ 0.2470909 (not 0.25, because landmarks cluster at eye line)
+    //   For shDrop=0.10: d_px ≈ 131.724 → sTorso ≈ 92.21px → torso-only r ≈ 78.38px
+    //   With sFace ≈ 112.26px → frontal.r ≈ 95.42px (face dominates)
+    //
+    // Both assertions are load-bearing:
+    //   - delete sFace (force scale=sTorso) → frontal.r becomes 78.38, outside [90,100] → caught
+    //   - delete sTorso (force scale=sFace) → profile.r becomes 95.42, ratio 1.0 >= 0.75 ✓
+    //     but profile then lacks rotation-invariance: ratio ≥ 0.75 catches the torso deletion
+    //
+    // Frontal: face estimator must produce this radius (not the torso-only fallback)
+    expect(frontal.r).toBeGreaterThan(90)
+    expect(frontal.r).toBeLessThan(100)
 
-    // Profile case: torso takes over (face box collapses in x)
-    // but should still be substantially sized
+    // Profile: must not collapse; ratio must exceed the torso-only mutation case (0.649)
     expect(profile.r).toBeGreaterThanOrEqual(0.75 * frontal.r)
   })
 
