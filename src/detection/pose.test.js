@@ -155,6 +155,38 @@ describe('PoseDetector', () => {
     await p1
     expect(detector.isReady).toBe(true)
   })
+
+  // Face clustered near the top of the frame, shoulders below it.
+  const HEAD_POSE = {
+    0:  { x: 0.50, y: 0.20 },                                            // nose
+    1:  { x: 0.48, y: 0.19 }, 2:  { x: 0.47, y: 0.19 }, 3: { x: 0.46, y: 0.19 },
+    4:  { x: 0.52, y: 0.19 }, 5:  { x: 0.53, y: 0.19 }, 6: { x: 0.54, y: 0.19 },
+    7:  { x: 0.44, y: 0.20 }, 8:  { x: 0.56, y: 0.20 },                  // ears
+    9:  { x: 0.48, y: 0.22 }, 10: { x: 0.52, y: 0.22 },                  // mouth
+    11: { x: 0.40, y: 0.40 }, 12: { x: 0.60, y: 0.40 },                  // shoulders
+  }
+
+  it('returns a head region alongside the joint markers', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks(HEAD_POSE)] })
+
+    const result = detector.detect(makeVideoEl())
+
+    expect(result.head).not.toBeNull()
+    expect(result.head.r).toBeGreaterThan(0)
+    // Centre is nudged up from the face centroid, toward the cranium.
+    expect(result.head.cy).toBeLessThan(0.20 * 720)
+  })
+
+  it('returns head: null when no pose is detected', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [] })
+    expect(detector.detect(makeVideoEl()).head).toBeNull()
+  })
+
+  it('returns head: null before init()', () => {
+    expect(detector.detect(makeVideoEl()).head).toBeNull()
+  })
 })
 
 describe('JOINT_CONFIG', () => {

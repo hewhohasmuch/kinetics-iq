@@ -1,4 +1,5 @@
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
+import { headRegion } from '../core/headRegion.js'
 
 const WASM_CDN  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
@@ -67,13 +68,13 @@ export class PoseDetector {
   // Returns { markers, allFound, foundIds } with centers in video pixel space.
   detect(videoElement) {
     if (!this._ready || !videoElement) {
-      return { markers: {}, allFound: false, foundIds: [] }
+      return { markers: {}, allFound: false, foundIds: [], head: null }
     }
 
     const result = this._landmarker.detectForVideo(videoElement, performance.now())
 
     if (!result.landmarks || result.landmarks.length === 0) {
-      return { markers: {}, allFound: false, foundIds: [] }
+      return { markers: {}, allFound: false, foundIds: [], head: null }
     }
 
     const lmNorm = result.landmarks[0]
@@ -106,6 +107,10 @@ export class PoseDetector {
       markers,
       allFound: allFound && Object.keys(markers).length === 3,
       foundIds: Object.keys(markers),
+      // Head circle for snapshot redaction. Independent of the joint roles —
+      // it is computed from the face/shoulder landmarks, not from JOINT_CONFIG,
+      // so it is present even when the measured joint is not fully visible.
+      head: headRegion(lmNorm, vw, vh),
     }
   }
 
