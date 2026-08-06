@@ -142,7 +142,32 @@ export class SessionDetailView {
     }
 
     if (shown === 1) framesEl.querySelector('.rom-frames').classList.add('single')
-    if (shown > 0)   framesEl.style.display = 'block'
+    if (shown > 0) {
+      framesEl.style.display = 'block'
+      this._renderRedactionNote(framesEl, s)
+    }
+  }
+
+  /**
+   * State the redaction status of the frames above. Worth saying explicitly
+   * because the answer differs between sessions: anything captured before this
+   * feature shipped has the patient's face visible, and nothing in the image
+   * itself makes that obvious at a glance.
+   *
+   * Deliberately not worded as anonymisation — the images stay linked to a
+   * named patient, so they remain PHI either way.
+   */
+  _renderRedactionNote(framesEl, s) {
+    let note = framesEl.querySelector('.frame-redaction-note')
+    if (!note) {
+      note = document.createElement('div')
+      note.className = 'frame-redaction-note'
+      framesEl.appendChild(note)
+    }
+    note.textContent = s.faceRedaction
+      ? 'Face blurred at capture'
+      : 'Face not blurred — captured before redaction was added'
+    note.classList.toggle('unredacted', !s.faceRedaction)
   }
 
   /**
@@ -536,6 +561,17 @@ export class SessionDetailView {
           font-weight: 600;
           text-align: center;
           margin-top: 6px;
+        }
+
+        .frame-redaction-note {
+          margin-top: 8px;
+          font-size: 12px;
+          opacity: 0.6;
+          text-align: center;
+        }
+        .frame-redaction-note.unredacted {
+          opacity: 0.85;
+          color: #facc15;
         }
 
         /* Timeline chart */

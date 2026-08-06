@@ -829,7 +829,7 @@ export class MeasureView {
       return
     }
     this._hideError()
-    this.recorder.setContext(this._joint, this._side, this._position)
+    this.recorder.setContext(this._joint, this._side, this._position, this.overlay.redactionMode)
     this.recorder.start()
     this._maxAngle    = -Infinity
     this._minAngle    = Infinity
@@ -958,7 +958,7 @@ export class MeasureView {
     const videoEl = this.camera.videoEl
     if (!videoEl || !this.detector.isReady) return
 
-    const { markers, allFound } = this.detector.detect(videoEl)
+    const { markers, allFound, head } = this.detector.detect(videoEl)
 
     // ── Angle calculation ──────────────────────────────────────────
     let rawFlexion  = null
@@ -1013,6 +1013,10 @@ export class MeasureView {
     this.overlay.draw(markers, toInteriorAngle(displayAngle, this._joint), {
       joint:      this._joint,
       labelAngle: displayAngle,
+      // Head redaction is drawn into the overlay, so the snapshot composited
+      // below inherits it from this same call — one code path, both surfaces.
+      head,
+      video:      videoEl,
     })
 
     // ── Extreme snapshots ──────────────────────────────────────────
@@ -1020,7 +1024,18 @@ export class MeasureView {
     // the overlay canvas, so capturing before the draw burns in the PREVIOUS
     // frame's angle — which put a number from the opposite end of the range
     // onto the peak-extension image.
-    if (this.recorder.isActive && displayAngle !== null) {
+    //
+    // `head` is also required here, not just displayAngle. displayAngle is a
+    // HELD value: MedianFilter3 and OneEuroFilter both return their last
+    // output when pushed a null sample, so displayAngle stays non-null for a
+    // frame or more after MediaPipe drops the pose — but `head` (from this
+    // same dropped-pose detect() call) is null, meaning overlay.draw() above
+    // drew NO redaction into this frame. Gating on displayAngle alone would
+    // let a frame with a plainly visible, unredacted face get composited and
+    // stored during a brief pose dropout (e.g. right as Start is tapped).
+    // Skipping a snapshot here is free — the next frame retries; storing an
+    // unredacted one is not.
+    if (this.recorder.isActive && displayAngle !== null && head) {
       // Snapshot both extremes: max flexion (most bent) and min flexion
       // (straightest). Extension tests peak at the minimum, not the maximum.
       if (displayAngle > this._maxAngle) {
