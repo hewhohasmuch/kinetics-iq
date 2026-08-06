@@ -229,6 +229,41 @@ describe('PoseDetector', () => {
     const result = detector.detect(makeVideoEl())
     expect(result.headResolved).toBe(false)
   })
+
+  it('returns headResolved: false when a face landmark has NaN x', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({
+      landmarks: [makeLandmarks({ ...HEAD_POSE, 3: { x: NaN, y: 0.19 } })],
+    })
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(false)
+  })
+
+  // Regression guard for the leak Finding A found: a head large enough to be
+  // real, held close to the right edge, whose RADIUS gets capped by
+  // MAX_RADIUS_FRACTION. The clamped circle lands entirely off-frame (so
+  // headRegion() returns null) even though one face landmark (the nose,
+  // index 0) sits a few pixels inside the video rect. headInputsFinite()
+  // alone can't see this — every coordinate here is finite — only
+  // anyFaceLandmarkInFrame() can, which is why headResolved must check both.
+  const CLAMPED_CLOSEUP = {
+    0:  { x: 1270 / 1280, y: 0.5 },   // nose — just inside the right edge
+    1:  { x: 2500 / 1280, y: 0.5 }, 2: { x: 2500 / 1280, y: 0.5 }, 3: { x: 2500 / 1280, y: 0.5 },
+    4:  { x: 2500 / 1280, y: 0.5 }, 5: { x: 2500 / 1280, y: 0.5 }, 6: { x: 2500 / 1280, y: 0.5 },
+    7:  { x: 2500 / 1280, y: 0.5 }, 8: { x: 2500 / 1280, y: 0.5 },
+    9:  { x: 2500 / 1280, y: 0.5 }, 10: { x: 2500 / 1280, y: 0.5 },
+    11: { x: 2388 / 1280, y: 760 / 720 }, 12: { x: 2388 / 1280, y: 760 / 720 },
+  }
+
+  it('returns headResolved: false for a large head whose clamped circle falls off-frame while a face landmark stays on screen', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks(CLAMPED_CLOSEUP)] })
+    const result = detector.detect(makeVideoEl())
+    // headRegion() itself sees only the clamped, off-frame circle.
+    expect(result.head).toBeNull()
+    // headResolved must catch that a face landmark is still on screen.
+    expect(result.headResolved).toBe(false)
+  })
 })
 
 describe('JOINT_CONFIG', () => {

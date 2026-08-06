@@ -1030,36 +1030,39 @@ export class MeasureView {
     // recorder) and the retained snapshot can end up describing two
     // different frames. Only the CAPTURE is conditional on `headResolved`.
     //
-    // `head === null` is ambiguous by itself: it means either (a) MediaPipe
-    // lost the pose entirely — displayAngle is a HELD value (MedianFilter3
-    // and OneEuroFilter both replay their last output on a null push), so
-    // it stays non-null while the overlay drew NO redaction this frame, and
+    // `head === null` alone is ambiguous: it means either (a) MediaPipe lost
+    // the pose entirely — displayAngle is a HELD value (MedianFilter3 and
+    // OneEuroFilter both replay their last output on a null push), so it
+    // stays non-null while the overlay drew NO redaction this frame, and
     // capturing here would leak a possibly-visible face — or (b) the pose is
-    // fine but the head is simply outside the video frame, which is a safe,
-    // ordinary case (e.g. ankle work, where the app's own framing hint puts
-    // the head off-screen for the whole session). `headResolved` (from
-    // headInputsFinite — landmarks 0–12 all finite) tells these apart:
-    // false only in case (a).
+    // fine but the head is genuinely off-frame (safe: nothing to redact,
+    // e.g. ankle work, where the app's own framing hint puts the head
+    // off-screen for the whole session) — or a third case headRegion()
+    // itself can't distinguish: a head large enough to be real but whose
+    // radius got capped, landing the clamped circle off-frame while a face
+    // landmark is still a few pixels inside the video (camera held close).
+    // `headResolved` (pose.js — a head region was found, OR headInputsFinite
+    // AND no face landmark is on screen at all) folds all of this into one
+    // boolean: true only when it is provably safe to capture.
     //
-    // When a new extreme lands on an unresolved frame, the previously
-    // retained frame no longer depicts the extreme (a later sample moved
-    // _maxAngle/_minAngle past it), so it's discarded (`: false`) rather
-    // than left in place under the wrong angle. An honest gap — no peak
-    // snapshot — beats a confident wrong number burned into the image.
+    // `_maxHasFrame`/`_minHasFrame` track whether the CURRENT extreme was
+    // captured, not whether any frame was ever captured for this recording.
+    // Both the unresolved case and a capture failure (_captureFrameTo
+    // returning false — canvas/video missing, or its try/catch fired) must
+    // clear the flag outright rather than keep a stale `true`: once a new
+    // extreme lands, any previously retained frame no longer depicts it, so
+    // an honest gap — no peak snapshot — beats a confident wrong number
+    // burned into the image.
     if (this.recorder.isActive && displayAngle !== null) {
       // Snapshot both extremes: max flexion (most bent) and min flexion
       // (straightest). Extension tests peak at the minimum, not the maximum.
       if (displayAngle > this._maxAngle) {
         this._maxAngle    = displayAngle
-        this._maxHasFrame = headResolved
-          ? (this._captureFrameTo('max') || this._maxHasFrame)
-          : false
+        this._maxHasFrame = headResolved && this._captureFrameTo('max')
       }
       if (displayAngle < this._minAngle) {
         this._minAngle    = displayAngle
-        this._minHasFrame = headResolved
-          ? (this._captureFrameTo('min') || this._minHasFrame)
-          : false
+        this._minHasFrame = headResolved && this._captureFrameTo('min')
       }
     }
 

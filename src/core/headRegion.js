@@ -74,6 +74,38 @@ export function headInputsFinite(landmarksNorm) {
 }
 
 /**
+ * Whether any FACE landmark (0–10) maps to a point actually inside the video
+ * frame. Non-finite landmarks are skipped when scanning — headInputsFinite()
+ * already covers that case; this function only answers "is a face pixel on
+ * screen", not "are the inputs trustworthy".
+ *
+ * Exists because headRegion()'s radius is CAPPED (MAX_RADIUS_FRACTION), and
+ * the off-frame rejection is applied to the CAPPED circle: a head that is
+ * large and mostly off-frame (e.g. camera held close) can yield a clamped
+ * circle that lies entirely outside the video rect while a face landmark is
+ * still a few pixels inside it. headRegion() returning null there does NOT
+ * mean "nothing to redact" — this function is what actually proves that.
+ *
+ * @param {Array<{x:number,y:number}>|null} landmarksNorm
+ * @param {number} videoW
+ * @param {number} videoH
+ * @returns {boolean}
+ */
+export function anyFaceLandmarkInFrame(landmarksNorm, videoW, videoH) {
+  if (!landmarksNorm || landmarksNorm.length === 0) return false
+  if (!videoW || !videoH) return false
+  for (const i of FACE_LANDMARKS) {
+    const lm = landmarksNorm[i]
+    if (!lm) continue
+    if (!Number.isFinite(lm.x) || !Number.isFinite(lm.y)) continue
+    const x = lm.x * videoW
+    const y = lm.y * videoH
+    if (x >= 0 && x <= videoW && y >= 0 && y <= videoH) return true
+  }
+  return false
+}
+
+/**
  * @param {Array<{x:number,y:number}>|null} landmarksNorm - MediaPipe normalised (0–1) landmarks
  * @param {number} videoW - intrinsic video width in pixels
  * @param {number} videoH - intrinsic video height in pixels

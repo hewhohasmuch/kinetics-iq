@@ -1,5 +1,5 @@
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
-import { headRegion, headInputsFinite } from '../core/headRegion.js'
+import { headRegion, headInputsFinite, anyFaceLandmarkInFrame } from '../core/headRegion.js'
 
 const WASM_CDN  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
@@ -103,19 +103,36 @@ export class PoseDetector {
       }
     }
 
+    // Head circle for snapshot redaction. Independent of the joint roles — it
+    // is computed from the face/shoulder landmarks, not from JOINT_CONFIG, so
+    // it is present even when the measured joint is not fully visible.
+    const head = headRegion(lmNorm, vw, vh)
+
+    // Whether `head` above is trustworthy enough to capture a snapshot from.
+    // `head === null` is ambiguous by itself — it means EITHER a resolved
+    // "nothing to redact" OR an unresolved "can't tell" — for two distinct
+    // reasons:
+    //   1. Bad inputs (NaN/missing landmark) — headInputsFinite() catches this.
+    //   2. A head that IS large enough to be a real face, but whose radius got
+    //      capped by MAX_RADIUS_FRACTION, landing the clamped circle entirely
+    //      off-frame while a face landmark is still a few pixels inside the
+    //      video rect (camera held close). anyFaceLandmarkInFrame() catches
+    //      this — headInputsFinite() can't, since it only checks finiteness.
+    // So `headResolved` is true only when EITHER a head region was actually
+    // found (a redaction was drawn) OR no face landmark is on screen at all
+    // (there is nothing to redact, e.g. ankle framing where the app's own
+    // instructions put the head off-camera for the whole session — that stays
+    // capturable). It is false whenever a face landmark is in frame but no
+    // redaction was drawn for it, whatever the reason.
+    const headResolved = headInputsFinite(lmNorm)
+      && (head !== null || !anyFaceLandmarkInFrame(lmNorm, vw, vh))
+
     return {
       markers,
       allFound: allFound && Object.keys(markers).length === 3,
       foundIds: Object.keys(markers),
-      // Head circle for snapshot redaction. Independent of the joint roles —
-      // it is computed from the face/shoulder landmarks, not from JOINT_CONFIG,
-      // so it is present even when the measured joint is not fully visible.
-      head: headRegion(lmNorm, vw, vh),
-      // Whether `head` above is trustworthy. headRegion() returning null is
-      // ambiguous on its own: it means either "no head in frame" (fine) or
-      // "inputs were unusable" (NaN/missing landmark — head could be
-      // anywhere, including in frame). headResolved disambiguates for callers.
-      headResolved: headInputsFinite(lmNorm),
+      head,
+      headResolved,
     }
   }
 

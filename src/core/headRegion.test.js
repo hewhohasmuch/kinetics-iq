@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { headRegion, redactionGeometry, headInputsFinite, MAX_RADIUS_FRACTION } from './headRegion.js'
+import { headRegion, redactionGeometry, headInputsFinite, anyFaceLandmarkInFrame, MAX_RADIUS_FRACTION } from './headRegion.js'
 
 const W = 720, H = 1280
 
@@ -154,6 +154,34 @@ describe('headInputsFinite', () => {
     expect(headInputsFinite(lm)).toBe(true)
     // Sanity check this is really the off-frame case headRegion treats as null.
     expect(headRegion(lm, W, H)).toBeNull()
+  })
+
+  it('is false when a landmark object is present but x/y are undefined', () => {
+    const lm = pose()
+    lm[5] = { visibility: 0.9 }  // no x/y at all
+    expect(headInputsFinite(lm)).toBe(false)
+  })
+
+  it('is false when a required index is null', () => {
+    const lm = pose()
+    lm[11] = null
+    expect(headInputsFinite(lm)).toBe(false)
+  })
+})
+
+describe('anyFaceLandmarkInFrame', () => {
+  it('is true for a normal centred pose', () => {
+    expect(anyFaceLandmarkInFrame(pose(), W, H)).toBe(true)
+  })
+
+  it('is false for a pose entirely off-frame', () => {
+    expect(anyFaceLandmarkInFrame(pose({ hx: -1.5, hy: -1.5 }), W, H)).toBe(false)
+  })
+
+  it('is false for null/empty input or zero dimensions', () => {
+    expect(anyFaceLandmarkInFrame(null, W, H)).toBe(false)
+    expect(anyFaceLandmarkInFrame([], W, H)).toBe(false)
+    expect(anyFaceLandmarkInFrame(pose(), 0, 0)).toBe(false)
   })
 })
 
