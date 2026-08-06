@@ -86,6 +86,11 @@ export function headInputsFinite(landmarksNorm) {
  * still a few pixels inside it. headRegion() returning null there does NOT
  * mean "nothing to redact" — this function is what actually proves that.
  *
+ * WARNING: this function SKIPS non-finite landmarks rather than failing on
+ * them, so it is only safe to call after `headInputsFinite()` has passed —
+ * a standalone caller can get a false "no face in frame" from inputs that
+ * are actually unreliable, not actually face-free.
+ *
  * @param {Array<{x:number,y:number}>|null} landmarksNorm
  * @param {number} videoW
  * @param {number} videoH

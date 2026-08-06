@@ -1093,7 +1093,10 @@ export class MeasureView {
    * are discarded.
    *
    * @param {'max'|'min'} which
-   * @returns {boolean} whether a frame was captured (non-critical if not)
+   * @returns {boolean} whether a frame was captured. Load-bearing: the caller
+   *   uses this to decide whether the current extreme gets a persisted
+   *   snapshot at all — false here means no image is retained for `which`,
+   *   not just a logged warning.
    */
   _captureFrameTo(which) {
     try {

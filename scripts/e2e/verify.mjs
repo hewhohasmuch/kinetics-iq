@@ -219,6 +219,72 @@ async function main() {
       else fail(`${which} snapshot blob missing from IndexedDB`)
     }
 
+    // Redaction smoke test. A blurred head leaves one distinctly smooth patch in
+    // an otherwise detailed photo, so grid the snapshot and compare the smoothest
+    // cell against the median cell. This catches the whole class of silent
+    // failures in one check — unsupported ctx.filter, an alpha leak, redaction
+    // drawn in the wrong order, a region computed somewhere daft.
+    //
+    // It is a SMOKE TEST, not proof: a large flat background would also read as
+    // smooth. The geometry itself is pinned by src/core/headRegion.test.js, and
+    // the screenshot below is still checked by eye.
+    const smooth = await page.evaluate(async (sid) => {
+      const db = await new Promise((res, rej) => {
+        const r = indexedDB.open('kinetics_images', 1)
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error)
+      })
+      const all = await new Promise((res, rej) => {
+        const req = db.transaction('images', 'readonly').objectStore('images').getAll()
+        req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error)
+      })
+      const rec = all.find((r) => r.sessionId === sid && r.which === 'peak')
+      if (!rec || !rec.blob) return null
+
+      const bmp = await createImageBitmap(rec.blob)
+      const cv  = document.createElement('canvas')
+      cv.width = bmp.width; cv.height = bmp.height
+      const cx = cv.getContext('2d')
+      cx.drawImage(bmp, 0, 0)
+      const { data } = cx.getImageData(0, 0, cv.width, cv.height)
+
+      // High-frequency energy per grid cell: mean absolute difference between
+      // horizontally adjacent pixels (red channel is enough).
+      const N = 12
+      const cw = Math.floor(cv.width / N)
+      const ch = Math.floor(cv.height / N)
+      if (cw < 2 || ch < 2) return null
+
+      const cells = []
+      for (let gy = 0; gy < N; gy++) {
+        for (let gx = 0; gx < N; gx++) {
+          let sum = 0, n = 0
+          for (let y = gy * ch; y < (gy + 1) * ch; y++) {
+            for (let x = gx * cw; x < (gx + 1) * cw - 1; x++) {
+              const i = (y * cv.width + x) * 4
+              sum += Math.abs(data[i] - data[i + 4])
+              n++
+            }
+          }
+          cells.push(n ? sum / n : 0)
+        }
+      }
+      cells.sort((a, b) => a - b)
+      return { min: cells[0], median: cells[Math.floor(cells.length / 2)] }
+    }, s.id)
+
+    if (!smooth) {
+      fail('could not read the peak snapshot back for redaction check')
+    } else if (smooth.median > 0 && smooth.min < 0.25 * smooth.median) {
+      pass(`snapshot contains a smooth region (min ${smooth.min.toFixed(1)} vs median ${smooth.median.toFixed(1)})`)
+    } else {
+      fail(`no blurred region found — min cell ${smooth.min.toFixed(1)}, median ${smooth.median.toFixed(1)}`)
+    }
+
+    // Redaction mode reached the record.
+    if (s.faceRedaction === 'blur1' || s.faceRedaction === 'solid1')
+      pass(`session stamped faceRedaction=${s.faceRedaction}`)
+    else fail(`session faceRedaction is ${JSON.stringify(s.faceRedaction)}`)
+
     console.log('\n5. History and detail')
     await page.click('#btn-history')
     await page.waitForSelector('.session-row', { timeout: 15_000 })
@@ -229,6 +295,7 @@ async function main() {
     await page.screenshot({ path: shot })
     pass(`SessionDetail rendered — screenshot: ${shot}`)
     info('check by eye: the angle burned into each frame should match its caption')
+    info('check by eye: the head is blurred in both frames, fully covered, no sharp rim')
 
     console.log('\n6. Console health')
     const real = consoleErrors.filter((e) => !/ERR_CERT|self.signed|favicon/i.test(e))

@@ -1162,6 +1162,8 @@ Before opening the PR, check on an iPhone:
 3. It holds up **prone**, with the head turned to one side.
 4. Frame rate has not dropped. The extra work is one blit plus one filtered draw per frame; if the readout feels laggier than before, that is the cause.
 5. Both saved snapshots in SessionDetail show a fully covered head with no sharp rim.
+6. **Measure** the blur at devicePixelRatio 3, do not assume it. `Overlay.resize()` sets `setTransform(dpr,0,0,dpr,0,0)`, and whether Canvas 2D `filter` blur lengths scale with the CTM is unresolved. If they do not, effective sigma is 0.35/dpr ≈ 0.117 × head radius — under-blur, which is the exact failure this feature exists to prevent. If a correction turns out to be needed, sigma and padding MUST be changed together: `padding = 2 * blurRadius` lives in `redactionGeometry()`, and scaling sigma alone drops the rim margin from 2 sigma to 0.67 sigma (~25% bleed).
+7. **Verify** the solid fallback actually engages on an engine without Canvas 2D filter support — the head must render as a solid block, not a sharp face. No unit test pins that `_drawRedaction` consults `_filterSupported`; a mutant that always takes the blur branch passes all four overlay tests and would emit a sharp face on Safari 16.
 
 Tune the constants in `src/core/headRegion.js` from what you see, then re-run `npm test` and `npm run verify:e2e`.
 

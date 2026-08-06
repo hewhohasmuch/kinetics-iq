@@ -239,13 +239,16 @@ describe('PoseDetector', () => {
     expect(result.headResolved).toBe(false)
   })
 
-  // Regression guard for the leak Finding A found: a head large enough to be
-  // real, held close to the right edge, whose RADIUS gets capped by
-  // MAX_RADIUS_FRACTION. The clamped circle lands entirely off-frame (so
-  // headRegion() returns null) even though one face landmark (the nose,
-  // index 0) sits a few pixels inside the video rect. headInputsFinite()
-  // alone can't see this — every coordinate here is finite — only
-  // anyFaceLandmarkInFrame() can, which is why headResolved must check both.
+  // Regression guard for the leak Finding A found: ten of the eleven face
+  // landmarks (1–10) sit far off the right edge of the frame, dragging the
+  // face CENTROID outside the video rect, while the eleventh (the nose,
+  // index 0) sits a few pixels inside it. headRegion() returns null here
+  // regardless of MAX_RADIUS_FRACTION — unclamped, cx - r_raw = 1342.85 is
+  // still > 1280 (the frame width), so the circle is rejected as off-frame
+  // either way. The clamp is not what's under test; the off-screen-centroid
+  // mechanism is. headInputsFinite() alone can't catch this — every
+  // coordinate here is finite — only anyFaceLandmarkInFrame() can, which is
+  // why headResolved must check both.
   const CLAMPED_CLOSEUP = {
     0:  { x: 1270 / 1280, y: 0.5 },   // nose — just inside the right edge
     1:  { x: 2500 / 1280, y: 0.5 }, 2: { x: 2500 / 1280, y: 0.5 }, 3: { x: 2500 / 1280, y: 0.5 },
