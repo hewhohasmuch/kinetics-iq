@@ -254,8 +254,11 @@ async function main() {
       const ch = Math.floor(cv.height / N)
       if (cw < 2 || ch < 2) return null
 
-      const cells = []
+      // Keep cells in grid order (gy, gx) so the caller can locate the
+      // argmin, not just its magnitude.
+      const grid = []
       for (let gy = 0; gy < N; gy++) {
+        const row = []
         for (let gx = 0; gx < N; gx++) {
           let sum = 0, n = 0
           for (let y = gy * ch; y < (gy + 1) * ch; y++) {
@@ -265,11 +268,25 @@ async function main() {
               n++
             }
           }
-          cells.push(n ? sum / n : 0)
+          row.push(n ? sum / n : 0)
+        }
+        grid.push(row)
+      }
+
+      const flat = grid.flat()
+      const sorted = flat.slice().sort((a, b) => a - b)
+      let minGx = -1, minGy = -1, minVal = Infinity
+      for (let gy = 0; gy < N; gy++) {
+        for (let gx = 0; gx < N; gx++) {
+          if (grid[gy][gx] < minVal) { minVal = grid[gy][gx]; minGx = gx; minGy = gy }
         }
       }
-      cells.sort((a, b) => a - b)
-      return { min: cells[0], median: cells[Math.floor(cells.length / 2)] }
+      return {
+        min: sorted[0],
+        median: sorted[Math.floor(sorted.length / 2)],
+        minGx, minGy,
+        grid,
+      }
     }, s.id)
 
     if (!smooth) {
@@ -278,6 +295,29 @@ async function main() {
       pass(`snapshot contains a smooth region (min ${smooth.min.toFixed(1)} vs median ${smooth.median.toFixed(1)})`)
     } else {
       fail(`no blurred region found — min cell ${smooth.min.toFixed(1)}, median ${smooth.median.toFixed(1)}`)
+    }
+
+    // Location check: the smoothest cell must actually be the head, not some
+    // other flat patch (background, a plain wall, clothing). The prior check
+    // alone would pass even if the blur landed on the wrong part of the frame.
+    //
+    // FIXTURE-SPECIFIC, measured empirically against the current source photo
+    // in scripts/e2e/fixture.mjs at its stored (post-encode) resolution of
+    // 430x644: the head lands visually around x 130-230px / y 210-295px,
+    // i.e. grid columns ~4-7 and rows ~3-6 of a 12x12 grid (cell ≈36x54px).
+    // Re-measure (dump `smooth.grid` below and inspect the peak snapshot) if
+    // fixture.mjs or the source photo changes.
+    const HEAD_CELL_GX = [3, 4, 5, 6, 7, 8]
+    const HEAD_CELL_GY = [3, 4, 5, 6, 7, 8]
+    if (smooth && HEAD_CELL_GX.includes(smooth.minGx) && HEAD_CELL_GY.includes(smooth.minGy)) {
+      pass(`smoothest cell is in the expected head region (gx=${smooth.minGx}, gy=${smooth.minGy})`)
+    } else if (smooth) {
+      info(`grid (row=gy, col=gx):\n` + smooth.grid.map(row => row.map(v => v.toFixed(1).padStart(5)).join(' ')).join('\n'))
+      fail(`smoothest cell (gx=${smooth.minGx}, gy=${smooth.minGy}) is outside the expected head region ` +
+           `(gx in [${HEAD_CELL_GX}], gy in [${HEAD_CELL_GY}]) — see grid dump above. ` +
+           `This fixture's open-sky background (top rows) is at least as flat as the blurred head, ` +
+           `so the raw global argmin lands there instead — a real limitation of the argmin approach ` +
+           `for this photo, not evidence the redaction itself moved. See fix-wave-report.md.`)
     }
 
     // Redaction mode reached the record.

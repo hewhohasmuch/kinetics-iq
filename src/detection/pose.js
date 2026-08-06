@@ -65,7 +65,19 @@ export class PoseDetector {
 
   // Drop-in replacement for ArucoDetector.detect().
   // Takes a video element directly (MediaPipe processes it natively).
-  // Returns { markers, allFound, foundIds } with centers in video pixel space.
+  //
+  // Returns { markers, allFound, foundIds, head, headResolved }:
+  //   - markers/allFound/foundIds: joint landmarks, centers in video pixel space.
+  //   - head: { cx, cy, r } circle (video pixel space) to redact over the
+  //     patient's head, or null — see headRegion() in ../core/headRegion.js.
+  //   - headResolved: whether `head` above is trustworthy enough to capture a
+  //     snapshot from THIS frame. True only when a redaction was actually
+  //     drawn (head !== null) or it is provable that no face landmark is on
+  //     screen at all (nothing to redact). False whenever a face landmark may
+  //     be in frame but no redaction was produced for it — e.g. non-finite
+  //     landmarks, or a real head whose capped circle fell off-rect — since
+  //     capturing in that state risks storing an unredacted face. See the
+  //     `headResolved` derivation below for the full case breakdown.
   detect(videoElement) {
     if (!this._ready || !videoElement) {
       return { markers: {}, allFound: false, foundIds: [], head: null, headResolved: false }

@@ -160,6 +160,14 @@ export class SessionDetailView {
    * "blurred" message would put a false statement in the patient record,
    * which is exactly what this feature exists to prevent.
    *
+   * `faceRedaction` is a session-level pipeline flag, not a per-frame content
+   * assertion — it records that the redaction pipeline was active during
+   * capture, not that a face was actually blurred in every frame (a session
+   * can legitimately run entirely with the head off-frame, e.g. ankle work,
+   * and still stamp 'blur1'). Worded around the pipeline rather than the
+   * pixels for that reason — "Face blurred" would be a claim about image
+   * content this flag cannot support for an ankle session.
+   *
    * Deliberately not worded as anonymisation — the images stay linked to a
    * named patient, so they remain PHI either way.
    */
@@ -171,8 +179,8 @@ export class SessionDetailView {
       framesEl.appendChild(note)
     }
     note.textContent =
-      s.faceRedaction === 'blur1'  ? 'Face blurred at capture' :
-      s.faceRedaction === 'solid1' ? 'Face masked at capture' :
+      s.faceRedaction === 'blur1'  ? 'Head redaction active at capture (blur)' :
+      s.faceRedaction === 'solid1' ? 'Head redaction active at capture (masked)' :
       'Face not blurred — captured before redaction was added'
     note.classList.toggle('unredacted', !s.faceRedaction)
   }

@@ -41,6 +41,25 @@ function profilePose(opts = {}) {
   return lm
 }
 
+/**
+ * Prone patient, camera rotated ~90° relative to the body: the shoulders
+ * project out to the SIDE of the head rather than below it, and the face
+ * landmarks foreshorten vertically the way profilePose() foreshortens them
+ * horizontally. Exercises the CRANIUM_NUDGE direction logic (axis computed
+ * from shoulders→face, not assumed screen-up) together with a genuinely
+ * foreshortened face box.
+ */
+function proneRotatedPose(opts = {}) {
+  const lm = pose(opts)
+  const hx = opts.hx ?? 0.5
+  const hy = opts.hy ?? 0.25
+  for (const i of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+    lm[i] = { ...lm[i], y: hy + (lm[i].y - hy) * 0.15 }
+  }
+  for (const i of [11, 12]) lm[i] = { ...lm[i], x: hx + 0.30, y: hy + 0.02 }
+  return lm
+}
+
 describe('headRegion', () => {
   it('covers the whole head, including above the topmost face landmark', () => {
     const reg = headRegion(pose(), W, H)
@@ -124,6 +143,87 @@ describe('headRegion', () => {
     const lm = pose()
     lm[0].x = NaN  // Inject NaN into the nose landmark
     expect(headRegion(lm, W, H)).toBeNull()
+  })
+})
+
+describe('headRegion — face landmark coverage', () => {
+  // Indices 0-10: the eleven face landmarks the redaction exists to hide.
+  // Nothing before this test asserted they actually land INSIDE the
+  // returned circle — the profile test above only pins the radius against
+  // collapsing, never checks containment.
+  const FACE_IDX = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  /** Returns { worstIdx, worstMargin } — margin is (r - dist) / r for the
+   *  tightest landmark; negative means that landmark is OUTSIDE the circle. */
+  function assertAllInside(landmarksNorm, reg, label) {
+    expect(reg, `${label}: headRegion returned null`).not.toBeNull()
+    let worstMargin = Infinity
+    let worstIdx = -1
+    for (const i of FACE_IDX) {
+      const lm = landmarksNorm[i]
+      const dist = Math.hypot(lm.x * W - reg.cx, lm.y * H - reg.cy)
+      const margin = (reg.r - dist) / reg.r
+      if (margin < worstMargin) { worstMargin = margin; worstIdx = i }
+      expect(
+        dist,
+        `${label}: landmark ${i} at dist ${dist.toFixed(2)}px vs r=${reg.r.toFixed(2)}px ` +
+        `(margin ${(margin * 100).toFixed(2)}% of r)`
+      ).toBeLessThanOrEqual(reg.r)
+    }
+    return { worstIdx, worstMargin }
+  }
+
+  it('contains every face landmark for a frontal pose', () => {
+    const lm = pose()
+    const { worstIdx, worstMargin } = assertAllInside(lm, headRegion(lm, W, H), 'frontal')
+    // Observed: worst landmark 9/10 (mouth), margin ≈ 24.55% of r.
+    expect(worstIdx).toBeGreaterThanOrEqual(0)
+    expect(worstMargin).toBeGreaterThan(0)
+  })
+
+  it('contains every face landmark for a profile pose', () => {
+    const lm = profilePose()
+    const { worstMargin } = assertAllInside(lm, headRegion(lm, W, H), 'profile')
+    // Observed: worst landmark 9/10 (mouth), margin ≈ 25.55% of r.
+    expect(worstMargin).toBeGreaterThan(0)
+  })
+
+  it('contains every face landmark for a prone/rotated pose', () => {
+    const lm = proneRotatedPose()
+    const { worstMargin } = assertAllInside(lm, headRegion(lm, W, H), 'prone/rotated')
+    // Observed: worst landmark 8 (right ear), margin ≈ 31.80% of r.
+    expect(worstMargin).toBeGreaterThan(0)
+  })
+
+  // --- Genuine finding from review, reproduced with this file's own fixtures ---
+  //
+  // The three tests above use this file's default fixture proportions
+  // (shDrop=0.18), under which sFace always dominates sTorso and the torso
+  // estimator never actually engages — they exercise the "normal" path
+  // only. The "does not collapse in profile" test earlier in this file
+  // deliberately tightens shDrop to 0.10 to force the sFace/sTorso
+  // crossover; that closer framing is also common for a side-on knee/hip
+  // shot, and it is the scenario the reviewer's arithmetic flagged as
+  // marginal (sTorso taking over shrinks the profile radius well below the
+  // frontal one, while CRANIUM_NUDGE keeps pushing the centre toward the
+  // cranium, away from the mouth/jaw).
+  //
+  // Reusing that exact fixture here reproduces the concern with this
+  // repo's real constants:
+  //   frontal.r ≈ 95.42px  (sFace wins)
+  //   profile.r ≈ 78.38px  (sTorso wins — the torso estimator takes over)
+  // and the mouth landmarks (9, 10) land OUTSIDE the circle by ~5% of r
+  // (~4px, ≈0.05 head-widths).
+  //
+  // Per instructions this is REPORTED, not silently fixed by tuning
+  // HEAD_RADIUS_FACTOR / TORSO_SCALE_COEFF / CRANIUM_NUDGE — see
+  // .superpowers/sdd/2026-08-05-face-blur-redaction/fix-wave-report.md.
+  // This test is intentionally left failing as a canary: it should only
+  // go green again once someone deliberately revisits those constants.
+  it('KNOWN GAP: close-framed profile pose (sTorso takeover) does not cover the mouth landmarks', () => {
+    const lm = profilePose({ shDrop: 0.10 })
+    const reg = headRegion(lm, W, H)
+    assertAllInside(lm, reg, 'profile (shDrop=0.10, close framing — sTorso takeover)')
   })
 })
 

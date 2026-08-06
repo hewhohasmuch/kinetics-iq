@@ -116,8 +116,17 @@ supine, seated, or side-on. It is what prevents the profile collapse. Using `up`
 than screen-up for the cranium nudge is what makes step 5 correct for a patient lying down
 with the camera at any rotation.
 
-No `visibility` threshold is applied anywhere in this function. `null` is returned in
-exactly one circumstance: there is no head in the picture to redact.
+No `visibility` threshold is applied anywhere in this function.
+
+> **Correction (added during implementation):** the paragraph above originally claimed
+> `null` is returned in exactly one circumstance — no head in the picture to redact. That
+> turned out to be false: `null` also results from non-finite inputs (NaN/missing
+> landmarks) and from a clamped circle that lands entirely off-rect even though a real
+> head is in frame (camera held close, `MAX_RADIUS_FRACTION` capping the radius). Those
+> are "can't tell", not "nothing to redact" — a caller that treats every `null` as safe to
+> capture can leak an unredacted face. This ambiguity is exactly why `headInputsFinite()`
+> and `anyFaceLandmarkInFrame()` (both in `headRegion.js`) and the `headResolved` gate in
+> `pose.js` had to be added — see Component 2 below.
 
 ### Constants
 
@@ -137,6 +146,18 @@ to be tuned against the e2e fixture and on-device, not treated as derived truth.
 line: call `headRegion(lmNorm, vw, vh)` and return the result as `head` on the existing
 return object. `head` is `null` when no pose is detected at all, matching the existing
 empty-marker early return.
+
+> **Added during implementation:** `detect()` also returns `headResolved`, a boolean gate
+> not in the original design. It exists because `head === null` alone is ambiguous (see the
+> correction above) — `headResolved` is true only when a redaction was actually drawn, or
+> it is provable (via `anyFaceLandmarkInFrame()`) that no face landmark is on screen, so
+> there is genuinely nothing to redact. `MeasureView` gates snapshot **capture** on
+> `headResolved`, not on `head` or `allFound` (see the corrected Accepted Limitation below).
+> One consequence worth calling out explicitly: a session can legitimately save **zero**
+> snapshots for either extreme if the head is never resolvable while recording — most
+> notably ankle framing, where the camera is deliberately aimed at the shin and foot and the
+> head is off-screen for the whole session. That is treated as correct behaviour (an honest
+> gap beats a caption over an image it doesn't depict), not a bug.
 
 ## Component 3 — `src/detection/overlay.js`
 
@@ -186,9 +207,20 @@ is looking at the screen to fix it.
 ### Accepted limitation
 
 If MediaPipe detects no pose at all, `detect()` bails before any landmarks exist, so there
-is no region and the live preview stays sharp. This is tolerable because snapshot capture
-requires `allFound` **and** an active recording, so nothing un-redacted can reach storage
-in that state. It is a preview-only gap.
+is no region and the live preview stays sharp.
+
+> **Correction (added during implementation):** the paragraph originally here claimed
+> capture "requires `allFound` **and** an active recording, so nothing un-redacted can
+> reach storage in that state" — that was wrong, and the gap it missed was found in review.
+> Capture actually gated on `displayAngle !== null`, and `displayAngle` is a **held** value:
+> `MedianFilter3`/`OneEuroFilter` both replay their last output when the pose drops, so
+> `displayAngle` stays non-null (and a capture can proceed) on exactly the frame where the
+> overlay drew *no* redaction because there were no landmarks to draw it from. `allFound`
+> being false does not stop capture at all — it only affects the joint/bone drawing, not the
+> redaction or the snapshot path. That was a real leak path, closed by gating capture on the
+> `headResolved` flag from `pose.js` (see Component 2) instead of on `allFound` or on
+> `head` being non-null. The preview-only characterisation above was therefore also wrong:
+> without `headResolved`, an un-redacted frame could reach storage, not just the live view.
 
 ## Component 4 — session record
 
