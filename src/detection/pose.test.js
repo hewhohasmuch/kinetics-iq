@@ -173,9 +173,15 @@ describe('PoseDetector', () => {
     const result = detector.detect(makeVideoEl())
 
     expect(result.head).not.toBeNull()
-    expect(result.head.r).toBeGreaterThan(0)
-    // Centre is nudged up from the face centroid, toward the cranium.
-    expect(result.head.cy).toBeLessThan(0.20 * 720)
+    // Verify all three components pinned to the fixture:
+    // The fixture is horizontally symmetric, so cx should be at frame center
+    expect(result.head.cx).toBeCloseTo(640, 1)
+    // Unnudged face centroid would be at 142.69; with CRANIUM_NUDGE applied, cy ≈ 96.5.
+    // Assert it's well below the unnudged value to prove the nudge is applied.
+    expect(result.head.cy).toBeLessThan(110)
+    // Radius should be substantial but not unreasonable for the fixture geometry
+    expect(result.head.r).toBeGreaterThan(120)
+    expect(result.head.r).toBeLessThan(145)
   })
 
   it('returns head: null when no pose is detected', async () => {
@@ -186,6 +192,23 @@ describe('PoseDetector', () => {
 
   it('returns head: null before init()', () => {
     expect(detector.detect(makeVideoEl()).head).toBeNull()
+  })
+
+  it('returns head even when the measured joint is invisible (joint landmarks fail visibility gate)', async () => {
+    await detector.init()
+    // detector defaults to knee/right; distal is index 28. Make it invisible.
+    mockDetectForVideo.mockReturnValue({
+      landmarks: [makeLandmarks({ ...HEAD_POSE, 28: { visibility: 0.2 } })],
+    })
+
+    const result = detector.detect(makeVideoEl())
+
+    // The joint should fail its visibility gate
+    expect(result.allFound).toBe(false)
+    expect('distal' in result.markers).toBe(false)
+    // But the head region is computed from face/shoulder landmarks, not gated by joint visibility
+    expect(result.head).not.toBeNull()
+    expect(result.head.r).toBeGreaterThan(0)
   })
 })
 
