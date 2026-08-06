@@ -29,14 +29,20 @@ export class SessionRecorder {
     this._active    = false
     this._joint     = 'knee'
     this._side      = 'right'
-    this._position  = 'prone'
+    this._position  = null
   }
 
   // Set the joint, side, and position before start() so they appear in the saved session.
+  //
+  // An absent position stays null rather than defaulting to 'prone'. That default
+  // is what stamped "Prone" onto standing shoulder measurements: the UI hid the
+  // position row for joints it considered position-less, but the recorder filled
+  // one in anyway and it was written to the patient record. A position nobody
+  // chose is not data — the views already omit the badge when it is null.
   setContext(joint, side, position) {
     this._joint    = joint
     this._side     = side
-    this._position = position ?? 'prone'
+    this._position = position ?? null
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────

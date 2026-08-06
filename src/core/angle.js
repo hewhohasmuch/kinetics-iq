@@ -157,6 +157,47 @@ export function toInteriorAngle(clinicalAngle, joint) {
 }
 
 /**
+ * The clinical NAME of the motion in each direction, per joint.
+ *
+ * The companion to JOINT_ANGLE_CONVENTION: that table fixes what the number
+ * means, this one fixes what to call it. Once the mapping stopped being one
+ * formula, "flexion" stopped being one word — the UI kept saying it for every
+ * joint, so a shoulder measurement labelled its arm-at-side frame "peak
+ * extension" when the value was minimum ELEVATION, and an ankle labelled
+ * plantarflexion the same way.
+ *
+ * `positive` is the motion in the direction the clinical angle grows;
+ * `negative` is the motion past neutral, where the signed angle goes below 0.
+ */
+export const JOINT_MOTION_TERMS = {
+  knee:     { positive: 'flexion',      negative: 'extension' },
+  hip:      { positive: 'flexion',      negative: 'extension' },
+  elbow:    { positive: 'flexion',      negative: 'extension' },
+  shoulder: { positive: 'elevation',    negative: 'extension' },
+  ankle:    { positive: 'dorsiflexion', negative: 'plantarflexion' },
+}
+
+// Joints not in the table fall back to the hinge terms, mirroring
+// DEFAULT_CONVENTION above.
+const DEFAULT_TERMS = JOINT_MOTION_TERMS.knee
+
+/**
+ * Clinical motion names for `joint`.
+ *
+ * Accepts the legacy combined form ('knee_right') as well as a bare joint name,
+ * because saved sessions predating the joint/side split still carry it and the
+ * detail views look terms up straight off the record. Without the split, a
+ * legacy 'shoulder_left' would silently fall back to flexion/extension.
+ *
+ * @param {string} joint - 'shoulder', or legacy 'shoulder_left'
+ * @returns {{positive: string, negative: string}}
+ */
+export function motionTerms(joint) {
+  const base = String(joint ?? '').split('_')[0]
+  return JOINT_MOTION_TERMS[base] ?? DEFAULT_TERMS
+}
+
+/**
  * AngleSmoother — reduces frame-to-frame jitter using a moving average.
  *
  * Raw ArUco detection gives ±3–8° noise even on stationary markers.

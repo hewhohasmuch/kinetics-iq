@@ -5,7 +5,7 @@
 import { Camera }            from '../detection/camera.js'
 import { PoseDetector }      from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
-import { jointAngle, toClinicalAngle, toInteriorAngle, MedianFilter3, OneEuroFilter } from '../core/angle.js'
+import { jointAngle, toClinicalAngle, toInteriorAngle, motionTerms, MedianFilter3, OneEuroFilter } from '../core/angle.js'
 import { SessionRecorder }   from '../core/session.js'
 import { saveSession, getActivePatientId, getPatient, enqueueImageUpload } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
@@ -22,6 +22,31 @@ const DETECTION_INTERVAL_MS = 1000 / DETECTION_HZ
 // the overlay's thin lines and angle text. ~1 MB retina JPEG → ~120-180 KB.
 const SNAPSHOT_MAX_EDGE = 1100   // px, longest edge
 const SNAPSHOT_QUALITY  = 0.78
+
+// Clinical positions offered per joint, first entry = default.
+//
+// This used to be a hardcoded prone/supine/seated row that was simply HIDDEN
+// for shoulder, elbow and ankle — but _position kept its 'prone' initial value
+// and was still stamped onto the saved session, so standing shoulder
+// measurements went into the patient record as "Prone". Every joint now offers
+// the positions it is actually measured in, so nothing is recorded that the
+// clinician did not pick.
+const JOINT_POSITIONS = {
+  knee:     ['prone', 'supine', 'seated'],
+  hip:      ['supine', 'prone', 'seated'],
+  shoulder: ['standing', 'seated'],
+  elbow:    ['seated', 'standing'],
+  ankle:    ['seated', 'standing'],
+}
+
+const POSITION_NAMES = {
+  prone:    'Prone',
+  supine:   'Supine',
+  seated:   'Seated',
+  standing: 'Standing',
+}
+
+const positionsFor = (joint) => JOINT_POSITIONS[joint] ?? JOINT_POSITIONS.knee
 
 export class MeasureView {
   constructor(container, onShowHistory, onShowPatients) {
@@ -45,7 +70,7 @@ export class MeasureView {
     this._rafId         = null
     this._joint         = 'knee'
     this._side          = 'right'
-    this._position      = 'prone'
+    this._position      = positionsFor('knee')[0]
     this._drawerOpen    = false
 
     this.currentAngle  = null
@@ -122,11 +147,8 @@ export class MeasureView {
                 <button class="seg-btn active" data-side="right">Right</button>
                 <button class="seg-btn" data-side="left">Left</button>
               </div>
-              <div class="seg-group" id="seg-position">
-                <button class="seg-btn active" data-position="prone">Prone</button>
-                <button class="seg-btn" data-position="supine">Supine</button>
-                <button class="seg-btn" data-position="seated">Seated</button>
-              </div>
+              <!-- Rebuilt per joint by _renderPositions() -->
+              <div class="seg-group" id="seg-position"></div>
             </div>
           </div>
         </div>
@@ -711,7 +733,7 @@ export class MeasureView {
       this._btnStop.style.display           = 'block'
       this._activeControls.style.display    = 'flex'
       this._selectorDrawer.style.display    = 'block'
-      this._updatePositionVisibility()
+      this._renderPositions(this._joint)
       this._setStatus('running', 'Detecting pose…')
       this._startLoop()
     } catch (err) {
@@ -1220,11 +1242,12 @@ export class MeasureView {
     this._segJoint.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.joint === joint)
     })
-    // Reset to the clinically typical position for each joint
-    const defaultPosition = { knee: 'prone', hip: 'supine' }
-    if (defaultPosition[joint]) this._selectPosition(defaultPosition[joint])
+    // Offer this joint's positions and reset to the clinically typical one
+    // (first in the list). Carrying the previous joint's position over is how
+    // a shoulder ended up recorded as "prone".
+    this._renderPositions(joint)
+    this._selectPosition(positionsFor(joint)[0])
     this._updateSelectionLabel()
-    this._updatePositionVisibility()
     this.calibration.clear()
     this._updateCalibrationUI()
   }
@@ -1248,19 +1271,25 @@ export class MeasureView {
     this._updateSelectionLabel()
   }
 
-  _updateSelectionLabel() {
-    const jointNames   = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow', ankle: 'Ankle' }
-    const posNames     = { prone: 'Prone', supine: 'Supine', seated: 'Seated' }
-    const side         = this._side.charAt(0).toUpperCase() + this._side.slice(1)
-    const usesPosition = this._joint === 'knee' || this._joint === 'hip'
-    this._angleLabel.textContent  = `${side} ${jointNames[this._joint]} flexion`
-    this._handleLabel.textContent = usesPosition
-      ? `${side} ${jointNames[this._joint]} · ${posNames[this._position]}`
-      : `${side} ${jointNames[this._joint]}`
+  /** Rebuild the position row for `joint`. The click handler is delegated on
+   *  #seg-position, so replacing the buttons needs no rebinding. */
+  _renderPositions(joint) {
+    this._segPosition.innerHTML = positionsFor(joint)
+      .map(p => {
+        const active = p === this._position ? ' active' : ''
+        return `<button class="seg-btn${active}" data-position="${p}">${POSITION_NAMES[p]}</button>`
+      })
+      .join('')
   }
 
-  _updatePositionVisibility() {
-    const usesPosition = this._joint === 'knee' || this._joint === 'hip'
-    this._segPosition.style.display = usesPosition ? 'flex' : 'none'
+  _updateSelectionLabel() {
+    const jointNames = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow', ankle: 'Ankle' }
+    const side       = this._side.charAt(0).toUpperCase() + this._side.slice(1)
+    // "flexion" is not the motion at every joint — the shoulder elevates and
+    // the ankle dorsiflexes.
+    const motion     = motionTerms(this._joint).positive
+    this._angleLabel.textContent  = `${side} ${jointNames[this._joint]} ${motion}`
+    this._handleLabel.textContent =
+      `${side} ${jointNames[this._joint]} · ${POSITION_NAMES[this._position]}`
   }
 }

@@ -323,3 +323,30 @@ describe('snapshot frame paths', () => {
   })
 
 })
+
+// ─── Clinical position ────────────────────────────────────────────────────────
+
+describe('measurement position', () => {
+
+  function sessionWithContext(...args) {
+    const recorder = new SessionRecorder()
+    if (args.length) recorder.setContext(...args)
+    recorder.start()
+    recorder.record(30)
+    return recorder.stop()
+  }
+
+  it('stamps the position it was given', () => {
+    expect(sessionWithContext('shoulder', 'left', 'standing').position).toBe('standing')
+  })
+
+  it('does NOT invent a position when none is supplied', () => {
+    // This defaulted to 'prone', which is how standing shoulder measurements
+    // were written into the patient record as "Prone". A position nobody chose
+    // is not data — the views omit the badge when it is null.
+    expect(sessionWithContext('shoulder', 'left', null).position).toBeNull()
+    expect(sessionWithContext('shoulder', 'left').position).toBeNull()
+    expect(sessionWithContext().position).toBeNull()
+  })
+
+})
