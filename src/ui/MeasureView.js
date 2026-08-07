@@ -957,8 +957,29 @@ export class MeasureView {
   _runDetection() {
     const videoEl = this.camera.videoEl
     if (!videoEl || !this.detector.isReady) return
+    if (!videoEl.videoWidth || !videoEl.videoHeight) return  // no frame yet
 
-    const { markers, allFound, head, headResolved } = this.detector.detect(videoEl)
+    // Grab the video frame ONCE into a reusable offscreen canvas, then feed
+    // that SAME canvas to detection, the overlay's blur source, and the
+    // retained snapshot below. `videoEl` is a live element — three separate
+    // `drawImage(videoEl, ...)` calls later in this tick (or worse, one now
+    // and one after MediaPipe's async-ish detection) can each see a
+    // different frame if the stream advances in between. The face-blur
+    // circle is positioned from whichever frame detection saw; if the
+    // snapshot pixels come from a later frame, the blur ends up offset from
+    // the face in the stored JPEG instead of sitting on it. One buffer makes
+    // preview, analysis and stored photo the same pixels by construction.
+    if (!this._frameCanvas) this._frameCanvas = document.createElement('canvas')
+    const frame = this._frameCanvas
+    if (frame.width !== videoEl.videoWidth || frame.height !== videoEl.videoHeight) {
+      // Assigning .width/.height clears the canvas — only do it on an actual
+      // resolution change, not every tick.
+      frame.width  = videoEl.videoWidth
+      frame.height = videoEl.videoHeight
+    }
+    frame.getContext('2d').drawImage(videoEl, 0, 0, frame.width, frame.height)
+
+    const { markers, allFound, head, headResolved } = this.detector.detect(frame)
 
     // ── Angle calculation ──────────────────────────────────────────
     let rawFlexion  = null
@@ -1015,8 +1036,10 @@ export class MeasureView {
       labelAngle: displayAngle,
       // Head redaction is drawn into the overlay, so the snapshot composited
       // below inherits it from this same call — one code path, both surfaces.
+      // `video` is the per-tick frame buffer, not the live element — see the
+      // frame-grab comment above _runDetection's detect() call.
       head,
-      video:      videoEl,
+      video:      frame,
     })
 
     // ── Extreme snapshots ──────────────────────────────────────────
@@ -1101,8 +1124,11 @@ export class MeasureView {
   _captureFrameTo(which) {
     try {
       const overlayCanvas = this._overlayCanvas
-      const videoEl = this.camera.videoEl
-      if (!overlayCanvas || !videoEl) return false
+      // Same frame-buffer canvas that fed detect() and overlay.draw() this
+      // tick — not a fresh read of the live video element. See the frame-grab
+      // comment at the top of _runDetection().
+      const frame = this._frameCanvas
+      if (!overlayCanvas || !frame) return false
 
       const w = overlayCanvas.width
       const h = overlayCanvas.height
@@ -1113,16 +1139,16 @@ export class MeasureView {
       offscreen.height = h
       const ctx = offscreen.getContext('2d')
 
-      // Draw video frame scaled to match the object-fit:cover transform
+      // Draw the buffered frame scaled to match the object-fit:cover transform
       const o = this.overlay
       const dpr = window.devicePixelRatio || 1
       ctx.save()
       ctx.scale(dpr, dpr)
       ctx.drawImage(
-        videoEl,
+        frame,
         o._offsetX, o._offsetY,
-        videoEl.videoWidth * o._scale,
-        videoEl.videoHeight * o._scale
+        frame.width  * o._scale,
+        frame.height * o._scale
       )
       ctx.restore()
 

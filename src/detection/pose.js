@@ -64,7 +64,10 @@ export class PoseDetector {
   }
 
   // Drop-in replacement for ArucoDetector.detect().
-  // Takes a video element directly (MediaPipe processes it natively).
+  // Takes a video element OR a canvas directly (MediaPipe's detectForVideo
+  // accepts either as a TexImageSource) — MeasureView passes the per-tick
+  // frame-buffer canvas so detection reads the same pixels the overlay and
+  // the stored snapshot do.
   //
   // Returns { markers, allFound, foundIds, head, headResolved }:
   //   - markers/allFound/foundIds: joint landmarks, centers in video pixel space.
@@ -93,8 +96,11 @@ export class PoseDetector {
     // Metric 3D landmarks (meters, relative to hip midpoint). May be absent for
     // a frame — callers fall back to the 2D center when world is undefined.
     const wlm    = result.worldLandmarks?.[0] ?? null
-    const vw     = videoElement.videoWidth
-    const vh     = videoElement.videoHeight
+    // videoElement may be an HTMLVideoElement (videoWidth/videoHeight) or an
+    // HTMLCanvasElement (width/height) — the frame-buffer canvas MeasureView
+    // now passes in has the latter.
+    const vw     = videoElement.videoWidth ?? videoElement.width
+    const vh     = videoElement.videoHeight ?? videoElement.height
     const cfg    = JOINT_CONFIG[this.joint][this.side]
 
     const markers = {}
