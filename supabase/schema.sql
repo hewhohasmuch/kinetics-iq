@@ -36,6 +36,7 @@ create table public.sessions (
   samples         integer,
   angle_timeline  jsonb,                               -- number[], ~3-4 KB per session
   angle_mode      text,
+  face_redaction  text,
   notes           text default '',
   app_version     text,
   peak_frame_path text,                                -- Storage path: max-flexion snapshot

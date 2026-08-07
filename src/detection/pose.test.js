@@ -155,6 +155,118 @@ describe('PoseDetector', () => {
     await p1
     expect(detector.isReady).toBe(true)
   })
+
+  // Face clustered near the top of the frame, shoulders below it.
+  const HEAD_POSE = {
+    0:  { x: 0.50, y: 0.20 },                                            // nose
+    1:  { x: 0.48, y: 0.19 }, 2:  { x: 0.47, y: 0.19 }, 3: { x: 0.46, y: 0.19 },
+    4:  { x: 0.52, y: 0.19 }, 5:  { x: 0.53, y: 0.19 }, 6: { x: 0.54, y: 0.19 },
+    7:  { x: 0.44, y: 0.20 }, 8:  { x: 0.56, y: 0.20 },                  // ears
+    9:  { x: 0.48, y: 0.22 }, 10: { x: 0.52, y: 0.22 },                  // mouth
+    11: { x: 0.40, y: 0.40 }, 12: { x: 0.60, y: 0.40 },                  // shoulders
+  }
+
+  it('returns a head region alongside the joint markers', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks(HEAD_POSE)] })
+
+    const result = detector.detect(makeVideoEl())
+
+    expect(result.head).not.toBeNull()
+    // Verify all three components pinned to the fixture:
+    // The fixture is horizontally symmetric, so cx should be at frame center
+    expect(result.head.cx).toBeCloseTo(640, 1)
+    // Unnudged face centroid would be at 142.69; with CRANIUM_NUDGE applied, cy ≈ 96.5.
+    // Assert it's well below the unnudged value to prove the nudge is applied.
+    expect(result.head.cy).toBeLessThan(110)
+    // Radius should be substantial but not unreasonable for the fixture geometry
+    expect(result.head.r).toBeGreaterThan(120)
+    expect(result.head.r).toBeLessThan(145)
+  })
+
+  it('returns head: null when no pose is detected', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [] })
+    expect(detector.detect(makeVideoEl()).head).toBeNull()
+  })
+
+  it('returns head: null before init()', () => {
+    expect(detector.detect(makeVideoEl()).head).toBeNull()
+  })
+
+  it('returns head even when the measured joint is invisible (joint landmarks fail visibility gate)', async () => {
+    await detector.init()
+    // detector defaults to knee/right; distal is index 28. Make it invisible.
+    mockDetectForVideo.mockReturnValue({
+      landmarks: [makeLandmarks({ ...HEAD_POSE, 28: { visibility: 0.2 } })],
+    })
+
+    const result = detector.detect(makeVideoEl())
+
+    // The joint should fail its visibility gate
+    expect(result.allFound).toBe(false)
+    expect('distal' in result.markers).toBe(false)
+    // But the head region is computed from face/shoulder landmarks, not gated by joint visibility
+    expect(result.head).not.toBeNull()
+    expect(result.head.r).toBeGreaterThan(0)
+  })
+
+  it('returns headResolved: true on a normal pose', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks(HEAD_POSE)] })
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(true)
+  })
+
+  it('returns headResolved: false when no landmarks are returned', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [] })
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(false)
+  })
+
+  it('returns headResolved: false before init()', () => {
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(false)
+  })
+
+  it('returns headResolved: false when a face landmark has NaN x', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({
+      landmarks: [makeLandmarks({ ...HEAD_POSE, 3: { x: NaN, y: 0.19 } })],
+    })
+    const result = detector.detect(makeVideoEl())
+    expect(result.headResolved).toBe(false)
+  })
+
+  // Regression guard for the leak Finding A found: ten of the eleven face
+  // landmarks (1–10) sit far off the right edge of the frame, dragging the
+  // face CENTROID outside the video rect, while the eleventh (the nose,
+  // index 0) sits a few pixels inside it. headRegion() returns null here
+  // regardless of MAX_RADIUS_FRACTION — unclamped, cx - r_raw = 1342.85 is
+  // still > 1280 (the frame width), so the circle is rejected as off-frame
+  // either way. The clamp is not what's under test; the off-screen-centroid
+  // mechanism is. headInputsFinite() alone can't catch this — every
+  // coordinate here is finite — only anyFaceLandmarkInFrame() can, which is
+  // why headResolved must check both.
+  const CLAMPED_CLOSEUP = {
+    0:  { x: 1270 / 1280, y: 0.5 },   // nose — just inside the right edge
+    1:  { x: 2500 / 1280, y: 0.5 }, 2: { x: 2500 / 1280, y: 0.5 }, 3: { x: 2500 / 1280, y: 0.5 },
+    4:  { x: 2500 / 1280, y: 0.5 }, 5: { x: 2500 / 1280, y: 0.5 }, 6: { x: 2500 / 1280, y: 0.5 },
+    7:  { x: 2500 / 1280, y: 0.5 }, 8: { x: 2500 / 1280, y: 0.5 },
+    9:  { x: 2500 / 1280, y: 0.5 }, 10: { x: 2500 / 1280, y: 0.5 },
+    11: { x: 2388 / 1280, y: 760 / 720 }, 12: { x: 2388 / 1280, y: 760 / 720 },
+  }
+
+  it('returns headResolved: false for a large head whose clamped circle falls off-frame while a face landmark stays on screen', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks(CLAMPED_CLOSEUP)] })
+    const result = detector.detect(makeVideoEl())
+    // headRegion() itself sees only the clamped, off-frame circle.
+    expect(result.head).toBeNull()
+    // headResolved must catch that a face landmark is still on screen.
+    expect(result.headResolved).toBe(false)
+  })
 })
 
 describe('JOINT_CONFIG', () => {

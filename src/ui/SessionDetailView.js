@@ -142,7 +142,47 @@ export class SessionDetailView {
     }
 
     if (shown === 1) framesEl.querySelector('.rom-frames').classList.add('single')
-    if (shown > 0)   framesEl.style.display = 'block'
+    if (shown > 0) {
+      framesEl.style.display = 'block'
+      this._renderRedactionNote(framesEl, s)
+    }
+  }
+
+  /**
+   * State the redaction status of the frames above. Worth saying explicitly
+   * because the answer differs between sessions: anything captured before this
+   * feature shipped has the patient's face visible, and nothing in the image
+   * itself makes that obvious at a glance.
+   *
+   * Branched on the exact `faceRedaction` value, not just truthy/falsy —
+   * 'blur1' and 'solid1' are a real distinction (the device fell back to a
+   * solid mask, e.g. because it couldn't blur) and collapsing them into one
+   * "blurred" message would put a false statement in the patient record,
+   * which is exactly what this feature exists to prevent.
+   *
+   * `faceRedaction` is a session-level pipeline flag, not a per-frame content
+   * assertion — it records that the redaction pipeline was active during
+   * capture, not that a face was actually blurred in every frame (a session
+   * can legitimately run entirely with the head off-frame, e.g. ankle work,
+   * and still stamp 'blur1'). Worded around the pipeline rather than the
+   * pixels for that reason — "Face blurred" would be a claim about image
+   * content this flag cannot support for an ankle session.
+   *
+   * Deliberately not worded as anonymisation — the images stay linked to a
+   * named patient, so they remain PHI either way.
+   */
+  _renderRedactionNote(framesEl, s) {
+    let note = framesEl.querySelector('.frame-redaction-note')
+    if (!note) {
+      note = document.createElement('div')
+      note.className = 'frame-redaction-note'
+      framesEl.appendChild(note)
+    }
+    note.textContent =
+      s.faceRedaction === 'blur1'  ? 'Head redaction active at capture (blur)' :
+      s.faceRedaction === 'solid1' ? 'Head redaction active at capture (masked)' :
+      'Face not blurred — captured before redaction was added'
+    note.classList.toggle('unredacted', !s.faceRedaction)
   }
 
   /**
@@ -536,6 +576,17 @@ export class SessionDetailView {
           font-weight: 600;
           text-align: center;
           margin-top: 6px;
+        }
+
+        .frame-redaction-note {
+          margin-top: 8px;
+          font-size: 12px;
+          opacity: 0.6;
+          text-align: center;
+        }
+        .frame-redaction-note.unredacted {
+          opacity: 0.85;
+          color: #facc15;
         }
 
         /* Timeline chart */
