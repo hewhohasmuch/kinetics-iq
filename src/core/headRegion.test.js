@@ -291,13 +291,25 @@ describe('headRegion — face landmark coverage', () => {
     expect(reg.r).toBeGreaterThan(85)                         // observed 90.64px
   })
 
-  it('grows the radius only as far as containment needs — the heuristic still wins when it over-covers', () => {
-    // The containment term must be a FLOOR, not a replacement. Deleting the
-    // heuristic (r = rCovering alone) would shrink the frontal radius from
-    // 139.30px to 105.11 × 1.10 = 115.62px, dropping the cranium headroom
-    // the module exists to provide.
-    const reg = headRegion(pose(), W, H)
-    expect(reg.r).toBeGreaterThan(130)                        // observed 139.30px
+  it('keeps the heuristic as a floor when the face landmarks give no spread', () => {
+    // This guards the heuristic's REMAINING job. At COVERAGE_MARGIN 1.60 the
+    // containment term out-reaches the heuristic in every realistic pose, so
+    // the old version of this test — asserting the frontal radius stayed above
+    // 130px — became vacuous: containment produces 168px there with or without
+    // the floor, and deleting the floor changed nothing.
+    //
+    // Where the floor still decides the outcome is a degenerate but reachable
+    // frame: MediaPipe collapses the face landmarks onto a point (heavy
+    // occlusion, or the subject far from the camera). maxDist is then only the
+    // cranium nudge, so containment alone would draw a circle around nothing.
+    const lm = pose()
+    for (const i of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+      lm[i] = { x: 0.5, y: 0.25, z: 0, visibility: 0.9 }
+    }
+    const reg = headRegion(lm, W, H)
+    // Floor gives 0.85 × sTorso ≈ 137px; containment alone would give
+    // 1.60 × nudge ≈ 77px, which this bound rejects.
+    expect(reg.r).toBeGreaterThan(120)
   })
 })
 

@@ -51,11 +51,15 @@ export const BLUR_RADIUS_FACTOR  = 0.35  // blur radius as a fraction of the dis
  * estimator takes over and CRANIUM_NUDGE keeps pushing the centre up toward
  * the cranium — left the mouth landmarks ~5% of r OUTSIDE the circle.
  *
- * 1.1 is slack, not a tuning knob for size: the landmarks mark the face, and
- * the skin around them (jaw, hairline) is still recognisable, so the circle
- * must clear the outermost landmark rather than graze it.
+ * The margin is NOT mere slack — it carries the whole cranium. MediaPipe's
+ * eleven face landmarks bound the FACE (eye line to mouth, ear to ear); the
+ * skull, hairline and the back of the head extend well past them and have no
+ * landmarks of their own, so containment alone can never reach them. Tuned
+ * against the e2e fixture by inspecting the exported snapshot, not derived:
+ * at 1.10 the face was covered but hair, ear and the back of the head were
+ * left sharp in the stored image.
  */
-export const COVERAGE_MARGIN     = 1.10
+export const COVERAGE_MARGIN     = 1.60
 
 const FACE_LANDMARKS  = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 const LEFT_SHOULDER   = 11

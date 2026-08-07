@@ -378,22 +378,46 @@ async function main() {
     // dumped grid).
     const HEAD_CELL_GX = [4, 5]
     const HEAD_CELL_GY = [4, 5]
-    const SMOOTH_FACTOR = 0.25   // head must be this much flatter than a typical cell
+
+    // COMPARISON BASIS — compare the head against the SUBJECT, not the whole
+    // frame. The obvious formulation ("head mean < 0.25 x whole-frame median")
+    // was tried and is unsatisfiable here, for a reason worth recording: it
+    // assumes the frame's typical content is busy, so a blurred region reads as
+    // an outlier low. Roughly half this fixture is flat sky and ocean, which
+    // drags the whole-grid median to ~0.8 — already near sky-flat. A genuinely
+    // blurred face is a smoothed but still varying disc (measured 1.3-3.8), so
+    // nothing short of the blur landing ON the sky — the original bug this
+    // check exists to catch — could ever pass a median-relative ceiling.
+    //
+    // Measured on this fixture: genuine blur 1.3-3.8, genuine sharp subject
+    // detail 5.4-14.4. Those bands are cleanly separated, so the check asserts
+    // the head is markedly flatter than the sharp body cells beside it. That
+    // fails loudly if the blur is mis-placed (head cells become sharp) and
+    // cannot be satisfied by the blur wandering onto the sky, since the
+    // reference is the subject rather than the frame.
+    const BODY_CELL_GX = [4, 5, 6, 7]
+    const BODY_CELL_GY = [8, 9]          // torso/legs — always sharp, never redacted
+    const HEAD_VS_BODY_MAX = 0.5         // head must be at most this fraction of body detail
 
     if (smooth) {
-      const headCells = []
-      for (const gy of HEAD_CELL_GY) for (const gx of HEAD_CELL_GX) headCells.push(smooth.grid[gy][gx])
-      const headMean = headCells.reduce((a, b) => a + b, 0) / headCells.length
+      const meanOf = (gxs, gys) => {
+        const cells = []
+        for (const gy of gys) for (const gx of gxs) cells.push(smooth.grid[gy][gx])
+        return cells.reduce((a, b) => a + b, 0) / cells.length
+      }
+      const headMean = meanOf(HEAD_CELL_GX, HEAD_CELL_GY)
+      const bodyMean = meanOf(BODY_CELL_GX, BODY_CELL_GY)
+      const ceiling  = HEAD_VS_BODY_MAX * bodyMean
 
-      if (smooth.median > 0 && headMean < SMOOTH_FACTOR * smooth.median) {
+      if (bodyMean > 0 && headMean < ceiling) {
         pass(`head region is blurred in the stored snapshot ` +
-             `(head mean ${headMean.toFixed(1)} vs median ${smooth.median.toFixed(1)}, ` +
-             `gx ${HEAD_CELL_GX}, gy ${HEAD_CELL_GY})`)
+             `(head ${headMean.toFixed(1)} vs sharp body ${bodyMean.toFixed(1)}, ` +
+             `ceiling ${ceiling.toFixed(1)})`)
       } else {
         info(`grid (row=gy, col=gx):\n` + smooth.grid.map(row => row.map(v => v.toFixed(1).padStart(5)).join(' ')).join('\n'))
         fail(`head region is NOT blurred in the stored snapshot — head cells ` +
              `(gx ${HEAD_CELL_GX}, gy ${HEAD_CELL_GY}) mean ${headMean.toFixed(1)}, ` +
-             `median ${smooth.median.toFixed(1)}, required < ${(SMOOTH_FACTOR * smooth.median).toFixed(1)}. ` +
+             `sharp body ${bodyMean.toFixed(1)}, required < ${ceiling.toFixed(1)}. ` +
              `Rerun with E2E_DIAG=1 to dump the grid and export the snapshot.`)
       }
     }
