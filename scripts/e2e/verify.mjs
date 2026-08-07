@@ -351,14 +351,32 @@ async function main() {
     // (gx=1, gy=2) every run. That was a legitimate failure of the check, not
     // of the redaction.
     //
-    // HEAD CELLS ARE FIXTURE-SPECIFIC. They were measured by exporting the
-    // stored peak snapshot (E2E_DIAG=1 writes .fixtures/peak-analysed.png plus
-    // the full grid) and reading the head's pixel extent off it: at the stored
-    // resolution of 430x644 with a 12x12 grid (cell 35x53px) the head spans
-    // roughly x 205-280px, y 218-300px → columns 6-7, rows 4-5.
-    // RE-MEASURE THESE if scripts/e2e/fixture.mjs or the source photo changes;
-    // rerun with E2E_DIAG=1 and repeat the procedure above.
-    const HEAD_CELL_GX = [6, 7]
+    // HEAD CELLS ARE FIXTURE-SPECIFIC. The cells below (gx 6-7 / gy 4-5) were
+    // re-derived on 2026-08-07 from a run confirmed BROKEN: the frame-buffer
+    // fix in 74dd950 hadn't landed yet at capture time, so the overlay and the
+    // composited video disagreed about the fixture's mid-run mirror flip and
+    // the blur landed off the head. Those cells passed only because they
+    // happened to sit over open sky in that mislocated frame, not because the
+    // head was actually there — see .superpowers/sdd/2026-08-05-face-blur-redaction/
+    // head-cells-report.md for the full account.
+    //
+    // Re-verified 2026-08-07 against a run confirmed CORRECT (head visibly
+    // blurred in peak-analysed.png and session-detail.png, subject and blur in
+    // agreement). At the stored resolution of 430x644 with a 12x12 grid (cell
+    // 35x53px), the true head/blur-disc bounding box is x≈170-240px,
+    // y≈235-300px → columns 4-6, rows 4-5. Column 6 was excluded from the
+    // measured cells below: at this resolution it is dominated by the sharp
+    // (deliberately unblurred) hairline and neck/collar just outside the face
+    // circle, not by the blur — including it would test hair sharpness, not
+    // redaction. Columns 4-5 / rows 4-5 is the tightest 2x2 block that is
+    // majority blurred-face content in every cell.
+    //
+    // RE-MEASURE THESE if scripts/e2e/fixture.mjs or the source photo changes:
+    // rerun with E2E_DIAG=1, open .fixtures/peak-analysed.png, and repeat the
+    // procedure above (grid-overlay a candidate block, confirm by eye it's on
+    // the blurred face and not sky/hair/clothing, then read its mean off the
+    // dumped grid).
+    const HEAD_CELL_GX = [4, 5]
     const HEAD_CELL_GY = [4, 5]
     const SMOOTH_FACTOR = 0.25   // head must be this much flatter than a typical cell
 
