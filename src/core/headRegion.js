@@ -39,6 +39,24 @@ export const CRANIUM_NUDGE       = 0.35  // centre offset along the shoulders→
 export const MAX_RADIUS_FRACTION = 0.50  // sanity cap against a garbage landmark frame
 export const BLUR_RADIUS_FACTOR  = 0.35  // blur radius as a fraction of the display radius
 
+/**
+ * The containment guarantee. After the centre is placed, the radius is grown
+ * until every one of the eleven face landmarks is inside the circle with this
+ * much slack:
+ *
+ *   r = max(r_heuristic, maxDistanceFromCentreToAnyFaceLandmark × COVERAGE_MARGIN)
+ *
+ * This is what turns "the heuristics probably cover the face" into an
+ * invariant. Before it existed, a close-framed profile pose — where the torso
+ * estimator takes over and CRANIUM_NUDGE keeps pushing the centre up toward
+ * the cranium — left the mouth landmarks ~5% of r OUTSIDE the circle.
+ *
+ * 1.1 is slack, not a tuning knob for size: the landmarks mark the face, and
+ * the skin around them (jaw, hairline) is still recognisable, so the circle
+ * must clear the outermost landmark rather than graze it.
+ */
+export const COVERAGE_MARGIN     = 1.10
+
 const FACE_LANDMARKS  = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 const LEFT_SHOULDER   = 11
 const RIGHT_SHOULDER  = 12
@@ -116,12 +134,27 @@ export function anyFaceLandmarkInFrame(landmarksNorm, videoW, videoH) {
  * @param {number} videoH - intrinsic video height in pixels
  * @returns {{cx:number, cy:number, r:number}|null} circle in VIDEO PIXEL space,
  *          or null when there is no head in the picture to redact
+ *
+ * CONTAINMENT, AND ITS ONE EXCEPTION. The returned circle contains every face
+ * landmark with COVERAGE_MARGIN of slack — by construction, not by hoping the
+ * heuristics were generous enough. The one exception is MAX_RADIUS_FRACTION,
+ * which is applied LAST and therefore WINS: on a garbage landmark frame the
+ * sanity cap takes precedence over containment, because a circle covering half
+ * the frame is its own failure. **Containment is guaranteed only when the
+ * radius is not capped** — i.e. when
+ * `r < MAX_RADIUS_FRACTION × min(videoW, videoH)`. A capped frame is by
+ * definition one whose landmarks are not to be trusted anyway; callers that
+ * need a hard guarantee should treat a capped result as unreliable rather than
+ * as proof the face is covered.
  */
 export function headRegion(landmarksNorm, videoW, videoH) {
   if (!landmarksNorm || landmarksNorm.length <= RIGHT_SHOULDER) return null
   if (!videoW || !videoH) return null
 
   // Face landmarks → video pixel space, collecting centroid and bounding box.
+  // The points are retained: the containment term below needs each one's
+  // distance from the FINAL centre, which is not known during this pass.
+  const facePts = []
   let sumX = 0, sumY = 0, count = 0
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   for (const i of FACE_LANDMARKS) {
@@ -129,6 +162,7 @@ export function headRegion(landmarksNorm, videoW, videoH) {
     if (!lm) continue
     const x = lm.x * videoW
     const y = lm.y * videoH
+    facePts.push({ x, y })
     sumX += x; sumY += y; count++
     if (x < minX) minX = x
     if (y < minY) minY = y
@@ -162,10 +196,36 @@ export function headRegion(landmarksNorm, videoW, videoH) {
   if (!(scale > 0)) return null
 
   const maxR = MAX_RADIUS_FRACTION * Math.min(videoW, videoH)
-  const r    = Math.min(HEAD_RADIUS_FACTOR * scale, maxR)
 
-  const cx = faceX + upX * (CRANIUM_NUDGE * r)
-  const cy = faceY + upY * (CRANIUM_NUDGE * r)
+  // The heuristic radius. It sets the CENTRE (via CRANIUM_NUDGE) and acts as
+  // the floor on the final radius — it is what covers the cranium and hair,
+  // which have no landmarks of their own to be contained.
+  //
+  // Capped HERE as well as at the end, which is what keeps the centre finite
+  // and on-frame for a garbage landmark frame. Without it, a nonsense scale
+  // nudges the centre thousands of pixels away and the whole region is
+  // discarded as off-frame — i.e. no redaction at all on the very frames
+  // least worth trusting.
+  const rHeuristic = Math.min(HEAD_RADIUS_FACTOR * scale, maxR)
+
+  const cx = faceX + upX * (CRANIUM_NUDGE * rHeuristic)
+  const cy = faceY + upY * (CRANIUM_NUDGE * rHeuristic)
+
+  // CONTAINMENT TERM. Grow the radius until every face landmark is provably
+  // inside, with COVERAGE_MARGIN of slack. Must come after the centre, since
+  // it measures from it. Where the heuristics already over-cover — the normal
+  // case — this term is inert and rHeuristic wins unchanged.
+  let maxDist = 0
+  for (const p of facePts) {
+    const d = Math.hypot(p.x - cx, p.y - cy)
+    if (d > maxDist) maxDist = d
+  }
+  const rCovering = maxDist * COVERAGE_MARGIN
+
+  // The sanity cap is applied LAST and therefore OVERRIDES containment: a
+  // garbage landmark frame must not be able to blur the whole picture. See
+  // the JSDoc above — containment holds only while the radius is uncapped.
+  const r = Math.min(Math.max(rHeuristic, rCovering), maxR)
 
   // Reject NaN or infinite values.
   if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(r)) return null

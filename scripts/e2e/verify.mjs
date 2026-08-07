@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process'
 import { request as httpsRequest } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { writeFileSync } from 'node:fs'
 import { ensureFixture, FIXTURE_DIR } from './fixture.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -43,6 +44,78 @@ let failures = 0
 const pass = (m) => console.log(`  ok    ${m}`)
 const fail = (m) => { console.error(`  FAIL  ${m}`); failures++ }
 const info = (m) => console.log(`        ${m}`)
+
+/**
+ * Read a saved snapshot back out of IndexedDB and measure its high-frequency
+ * energy on a 12x12 grid — mean absolute difference between horizontally
+ * adjacent pixels, red channel. A blurred region reads near zero; detailed
+ * photo texture reads high.
+ *
+ * @param {import('playwright').Page} page
+ * @param {string} sid  session id
+ * @param {'peak'|'min'} which
+ */
+function gridFor(page, sid, which) {
+  return page.evaluate(async ({ sid, which }) => {
+    const db = await new Promise((res, rej) => {
+      const r = indexedDB.open('kinetics_images', 1)
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error)
+    })
+    const all = await new Promise((res, rej) => {
+      const req = db.transaction('images', 'readonly').objectStore('images').getAll()
+      req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error)
+    })
+    const rec = all.find((r) => r.sessionId === sid && r.which === which)
+    if (!rec || !rec.blob) return null
+
+    const bmp = await createImageBitmap(rec.blob)
+    const cv  = document.createElement('canvas')
+    cv.width = bmp.width; cv.height = bmp.height
+    const cx = cv.getContext('2d')
+    cx.drawImage(bmp, 0, 0)
+    const { data } = cx.getImageData(0, 0, cv.width, cv.height)
+
+    const N  = 12
+    const cw = Math.floor(cv.width / N)
+    const ch = Math.floor(cv.height / N)
+    if (cw < 2 || ch < 2) return null
+
+    // Kept in grid order (gy, gx) so the caller can locate cells, not just
+    // magnitudes.
+    const grid = []
+    for (let gy = 0; gy < N; gy++) {
+      const row = []
+      for (let gx = 0; gx < N; gx++) {
+        let sum = 0, n = 0
+        for (let y = gy * ch; y < (gy + 1) * ch; y++) {
+          for (let x = gx * cw; x < (gx + 1) * cw - 1; x++) {
+            const i = (y * cv.width + x) * 4
+            sum += Math.abs(data[i] - data[i + 4])
+            n++
+          }
+        }
+        row.push(n ? sum / n : 0)
+      }
+      grid.push(row)
+    }
+
+    const sorted = grid.flat().slice().sort((a, b) => a - b)
+    let minGx = -1, minGy = -1, minVal = Infinity
+    for (let gy = 0; gy < N; gy++) {
+      for (let gx = 0; gx < N; gx++) {
+        if (grid[gy][gx] < minVal) { minVal = grid[gy][gx]; minGx = gx; minGy = gy }
+      }
+    }
+    return {
+      min: sorted[0],
+      median: sorted[Math.floor(sorted.length / 2)],
+      minGx, minGy,
+      grid, N,
+      width: cv.width, height: cv.height,
+      dataUrl: cv.toDataURL('image/png'),
+    }
+  }, { sid, which })
+}
 
 /** Resolve once the dev server answers, or throw after `timeoutMs`. */
 function waitForServer(url, timeoutMs = 60_000) {
@@ -150,6 +223,15 @@ async function main() {
     await page.click('#btn-record-start')
     await page.evaluate(() => { window.__shownAngles.length = 0 })
     await page.waitForTimeout(RECORD_MS)
+    if (process.env.E2E_DIAG) {
+      // DIAG: the LIVE preview — overlay canvas stacked over the video element
+      // by CSS. Alignment here is guaranteed by construction (same box, same
+      // _scale), so this is the control for whether a misaligned redaction in
+      // the stored snapshot is a compositing bug or a capture-timing artifact.
+      const p = join(FIXTURE_DIR, 'live-preview.png')
+      await page.locator('.camera-stack').screenshot({ path: p })
+      info(`DIAG live preview -> ${p}`)
+    }
     info(`live ROM bar reads ${await page.textContent('#rom-value')}`)
     await page.click('#btn-record-stop')
     await page.waitForSelector('#notes-panel', { state: 'visible', timeout: 10_000 })
@@ -228,66 +310,23 @@ async function main() {
     // It is a SMOKE TEST, not proof: a large flat background would also read as
     // smooth. The geometry itself is pinned by src/core/headRegion.test.js, and
     // the screenshot below is still checked by eye.
-    const smooth = await page.evaluate(async (sid) => {
-      const db = await new Promise((res, rej) => {
-        const r = indexedDB.open('kinetics_images', 1)
-        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error)
-      })
-      const all = await new Promise((res, rej) => {
-        const req = db.transaction('images', 'readonly').objectStore('images').getAll()
-        req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error)
-      })
-      const rec = all.find((r) => r.sessionId === sid && r.which === 'peak')
-      if (!rec || !rec.blob) return null
+    const smooth = await gridFor(page, s.id, 'peak')
 
-      const bmp = await createImageBitmap(rec.blob)
-      const cv  = document.createElement('canvas')
-      cv.width = bmp.width; cv.height = bmp.height
-      const cx = cv.getContext('2d')
-      cx.drawImage(bmp, 0, 0)
-      const { data } = cx.getImageData(0, 0, cv.width, cv.height)
-
-      // High-frequency energy per grid cell: mean absolute difference between
-      // horizontally adjacent pixels (red channel is enough).
-      const N = 12
-      const cw = Math.floor(cv.width / N)
-      const ch = Math.floor(cv.height / N)
-      if (cw < 2 || ch < 2) return null
-
-      // Keep cells in grid order (gy, gx) so the caller can locate the
-      // argmin, not just its magnitude.
-      const grid = []
-      for (let gy = 0; gy < N; gy++) {
-        const row = []
-        for (let gx = 0; gx < N; gx++) {
-          let sum = 0, n = 0
-          for (let y = gy * ch; y < (gy + 1) * ch; y++) {
-            for (let x = gx * cw; x < (gx + 1) * cw - 1; x++) {
-              const i = (y * cv.width + x) * 4
-              sum += Math.abs(data[i] - data[i + 4])
-              n++
-            }
-          }
-          row.push(n ? sum / n : 0)
-        }
-        grid.push(row)
+    // DIAG: dump the grid and export the analysed snapshot, so the head cells
+    // below can be re-measured against the image they were derived from.
+    if (smooth && process.env.E2E_DIAG) {
+      for (const which of ['peak', 'min']) {
+        const d = which === 'peak' ? smooth : await gridFor(page, s.id, which)
+        if (!d) { info(`DIAG ${which}: unavailable`); continue }
+        const p = join(FIXTURE_DIR, `${which}-analysed.png`)
+        writeFileSync(p, Buffer.from(d.dataUrl.split(',')[1], 'base64'))
+        info(`DIAG ${which} ${d.width}x${d.height} -> ${p}  (cell ${Math.floor(d.width / d.N)}x${Math.floor(d.height / d.N)}px)`)
+        info(`DIAG ${which} grid (row=gy, col=gx):\n` +
+          '      gx:' + Array.from({ length: d.N }, (_, i) => String(i).padStart(5)).join(' ') + '\n' +
+          d.grid.map((row, gy) => `  gy=${String(gy).padStart(2)} ` +
+            row.map((v) => v.toFixed(1).padStart(5)).join(' ')).join('\n'))
       }
-
-      const flat = grid.flat()
-      const sorted = flat.slice().sort((a, b) => a - b)
-      let minGx = -1, minGy = -1, minVal = Infinity
-      for (let gy = 0; gy < N; gy++) {
-        for (let gx = 0; gx < N; gx++) {
-          if (grid[gy][gx] < minVal) { minVal = grid[gy][gx]; minGx = gx; minGy = gy }
-        }
-      }
-      return {
-        min: sorted[0],
-        median: sorted[Math.floor(sorted.length / 2)],
-        minGx, minGy,
-        grid,
-      }
-    }, s.id)
+    }
 
     if (!smooth) {
       fail('could not read the peak snapshot back for redaction check')
@@ -297,27 +336,48 @@ async function main() {
       fail(`no blurred region found — min cell ${smooth.min.toFixed(1)}, median ${smooth.median.toFixed(1)}`)
     }
 
-    // Location check: the smoothest cell must actually be the head, not some
-    // other flat patch (background, a plain wall, clothing). The prior check
-    // alone would pass even if the blur landed on the wrong part of the frame.
+    // LOCATION CHECK — head region vs control.
     //
-    // FIXTURE-SPECIFIC, measured empirically against the current source photo
-    // in scripts/e2e/fixture.mjs at its stored (post-encode) resolution of
-    // 430x644: the head lands visually around x 130-230px / y 210-295px,
-    // i.e. grid columns ~4-7 and rows ~3-6 of a 12x12 grid (cell ≈36x54px).
-    // Re-measure (dump `smooth.grid` below and inspect the peak snapshot) if
-    // fixture.mjs or the source photo changes.
-    const HEAD_CELL_GX = [3, 4, 5, 6, 7, 8]
-    const HEAD_CELL_GY = [3, 4, 5, 6, 7, 8]
-    if (smooth && HEAD_CELL_GX.includes(smooth.minGx) && HEAD_CELL_GY.includes(smooth.minGy)) {
-      pass(`smoothest cell is in the expected head region (gx=${smooth.minGx}, gy=${smooth.minGy})`)
-    } else if (smooth) {
-      info(`grid (row=gy, col=gx):\n` + smooth.grid.map(row => row.map(v => v.toFixed(1).padStart(5)).join(' ')).join('\n'))
-      fail(`smoothest cell (gx=${smooth.minGx}, gy=${smooth.minGy}) is outside the expected head region ` +
-           `(gx in [${HEAD_CELL_GX}], gy in [${HEAD_CELL_GY}]) — see grid dump above. ` +
-           `This fixture's open-sky background (top rows) is at least as flat as the blurred head, ` +
-           `so the raw global argmin lands there instead — a real limitation of the argmin approach ` +
-           `for this photo, not evidence the redaction itself moved. See fix-wave-report.md.`)
+    // The smoke test above only proves *a* smooth patch exists somewhere; it
+    // would pass with the blur landing on the wrong part of the frame. This
+    // check is the head-vs-control comparison the design spec asked for:
+    // the cells the head occupies must be far smoother than a typical cell.
+    //
+    // The earlier global-argmin form of this check was WRONG and was removed.
+    // It asserted the single smoothest cell in the whole image was the head —
+    // but this fixture is a beach photo with a large expanse of open sky, and
+    // sky is flatter than a blurred head. Measured: sky cells run 0.1-0.3
+    // while the blurred head runs ~1-2. The argmin therefore lands in the sky
+    // (gx=1, gy=2) every run. That was a legitimate failure of the check, not
+    // of the redaction.
+    //
+    // HEAD CELLS ARE FIXTURE-SPECIFIC. They were measured by exporting the
+    // stored peak snapshot (E2E_DIAG=1 writes .fixtures/peak-analysed.png plus
+    // the full grid) and reading the head's pixel extent off it: at the stored
+    // resolution of 430x644 with a 12x12 grid (cell 35x53px) the head spans
+    // roughly x 205-280px, y 218-300px → columns 6-7, rows 4-5.
+    // RE-MEASURE THESE if scripts/e2e/fixture.mjs or the source photo changes;
+    // rerun with E2E_DIAG=1 and repeat the procedure above.
+    const HEAD_CELL_GX = [6, 7]
+    const HEAD_CELL_GY = [4, 5]
+    const SMOOTH_FACTOR = 0.25   // head must be this much flatter than a typical cell
+
+    if (smooth) {
+      const headCells = []
+      for (const gy of HEAD_CELL_GY) for (const gx of HEAD_CELL_GX) headCells.push(smooth.grid[gy][gx])
+      const headMean = headCells.reduce((a, b) => a + b, 0) / headCells.length
+
+      if (smooth.median > 0 && headMean < SMOOTH_FACTOR * smooth.median) {
+        pass(`head region is blurred in the stored snapshot ` +
+             `(head mean ${headMean.toFixed(1)} vs median ${smooth.median.toFixed(1)}, ` +
+             `gx ${HEAD_CELL_GX}, gy ${HEAD_CELL_GY})`)
+      } else {
+        info(`grid (row=gy, col=gx):\n` + smooth.grid.map(row => row.map(v => v.toFixed(1).padStart(5)).join(' ')).join('\n'))
+        fail(`head region is NOT blurred in the stored snapshot — head cells ` +
+             `(gx ${HEAD_CELL_GX}, gy ${HEAD_CELL_GY}) mean ${headMean.toFixed(1)}, ` +
+             `median ${smooth.median.toFixed(1)}, required < ${(SMOOTH_FACTOR * smooth.median).toFixed(1)}. ` +
+             `Rerun with E2E_DIAG=1 to dump the grid and export the snapshot.`)
+      }
     }
 
     // Redaction mode reached the record.

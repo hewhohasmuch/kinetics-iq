@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { headRegion, redactionGeometry, headInputsFinite, anyFaceLandmarkInFrame, MAX_RADIUS_FRACTION } from './headRegion.js'
+import { headRegion, redactionGeometry, headInputsFinite, anyFaceLandmarkInFrame, MAX_RADIUS_FRACTION, COVERAGE_MARGIN } from './headRegion.js'
 
 const W = 720, H = 1280
 
@@ -80,34 +80,63 @@ describe('headRegion', () => {
     expect(reg.cy).toBeLessThan(noseY)   // smaller y = further up the frame
   })
 
-  it('does not collapse in profile — the failure the two estimators exist for', () => {
-    // Use a tighter close-up where face estimator dominates frontally,
-    // so the profile transform flips which term wins.
-    const frontal = headRegion(pose({ shDrop: 0.10 }), W, H)
-    const profile = headRegion(profilePose({ shDrop: 0.10 }), W, H)
+  // ─── Mutation guards: each scale estimator must be load-bearing ──────
+  //
+  // These two tests replace an earlier single test that pinned
+  //   90 < frontal(shDrop=0.10).r < 100  and  profile.r >= 0.75 × frontal.r
+  // Both of those assertions went VACUOUS when COVERAGE_MARGIN containment
+  // was added, because shDrop=0.10 is precisely the sFace/sTorso crossover —
+  // the point where deleting either estimator barely moves the radius,
+  // since the containment term picks up most of the slack:
+  //
+  //   fixture              baseline   scale=sTorso     scale=sFace
+  //   frontal shDrop 0.10    99.00      92.56 (-6.5%)    99.00 ( 0.0%)
+  //   profile shDrop 0.10    90.64      90.64 ( 0.0%)    84.30 (-7.0%)
+  //   → old band  (90..100):  99.00 ok,  92.56 ok  ← MISSES scale=sTorso
+  //   → old ratio (>= 0.75):  0.9155,    0.9792,   0.8516 ← MISSES both
+  //
+  // So each estimator is now pinned at the framing where it actually does
+  // the work, and the numbers below are measured, not assumed.
+
+  it('keeps sFace load-bearing: close framing, where the torso distance is too short to set the scale', () => {
+    // shDrop=0.04 puts the shoulders almost at the chin: the face-centroid →
+    // shoulder distance is ~36.9px, so sTorso ≈ 25.8px and only the face span
+    // can set a sensible scale.
+    const reg = headRegion(pose({ shDrop: 0.04 }), W, H)
+    expect(reg).not.toBeNull()
+
+    // MUTATION (i) — delete sFace (scale = sTorso):
+    //   r 99.00 → 75.43 (-23.8%), cy 282.88 → 304.84.
+    //   The circle collapses onto the face landmarks themselves (containment
+    //   alone, from a centre that barely gets nudged) and stops covering the
+    //   cranium: clearance above the eye line falls 115.6px → 70.1px.
+    // MUTATION (ii) — delete sTorso: r unchanged at 99.00. This fixture is
+    //   deliberately silent about sTorso; the profile test below covers it.
+    expect(reg.r).toBeGreaterThan(90)
+
+    // The same failure stated as the property that actually matters — the
+    // cranium and hair sit above the topmost landmark and have no landmark
+    // of their own, so containment cannot cover them. Only the heuristic can.
+    const eyeY = (0.25 - 0.04 * 0.4) * H   // 299.5px
+    expect(eyeY - (reg.cy - reg.r)).toBeGreaterThan(100)   // observed 115.64px
+  })
+
+  it('keeps sTorso load-bearing: does not collapse in profile', () => {
+    // Default framing (shDrop=0.18), where the profile squeeze is the real
+    // scenario. The x-only squeeze leaves the face centroid — and therefore
+    // sTorso — untouched, so the radius must not move at all.
+    const frontal = headRegion(pose(), W, H)
+    const profile = headRegion(profilePose(), W, H)
     expect(profile).not.toBeNull()
 
-    // The fixture parameters yield:
-    //   Face centroid y ≈ 0.2470909 (not 0.25, because landmarks cluster at eye line)
-    //   For shDrop=0.10: d_px ≈ 131.724 → sTorso ≈ 92.21px
-    //   With sFace ≈ 112.26px → frontal.r ≈ 95.42px (face wins)
-    //
-    // Both assertions are load-bearing; each catches a different mutation:
-    //
-    //   Mutation A — delete sFace (scale=sTorso):
-    //     frontal.r = 0.85 × 92.21 = 78.38px, profile.r = 78.38px (ratio 1.0)
-    //     band assertion (90 < r < 100) catches it
-    //
-    //   Mutation B — delete sTorso (scale=sFace):
-    //     frontal.r = 95.42px (unchanged, sFace already dominated), profile.r = 61.91px (ratio 0.649)
-    //     ratio assertion (>= 0.75) catches it
-    //
-    // Band assertion: pin the face estimator in use for frontal
-    expect(frontal.r).toBeGreaterThan(90)
-    expect(frontal.r).toBeLessThan(100)
-
-    // Ratio assertion: ensure the torso fallback engages in profile
-    expect(profile.r).toBeGreaterThanOrEqual(0.75 * frontal.r)
+    // Baseline: frontal.r = profile.r = 139.30 (sTorso dominates both).
+    // MUTATION (ii) — delete sTorso (scale = sFace):
+    //   frontal.r 139.30 → 99.00, profile.r 139.30 → 84.30 (-39.5%),
+    //   ratio 1.0000 → 0.8516. Both assertions below fail.
+    // MUTATION (i) — delete sFace: both unchanged at 139.30. Not this test's
+    //   job; the close-framing test above is what catches that one.
+    expect(profile.r).toBeGreaterThan(120)
+    expect(profile.r).toBeGreaterThanOrEqual(0.95 * frontal.r)
   })
 
   it('pushes the centre away from the shoulders regardless of body rotation', () => {
@@ -133,6 +162,26 @@ describe('headRegion', () => {
     expect(reg.r).toBeLessThanOrEqual(MAX_RADIUS_FRACTION * Math.min(W, H))
   })
 
+  it('lets the cap OVERRIDE containment — the one documented exception', () => {
+    // The containment term (COVERAGE_MARGIN) is applied BEFORE the cap, so on
+    // a garbage landmark frame the cap wins and containment does NOT hold.
+    // This is deliberate: a circle covering half the picture is its own
+    // failure, and a frame whose landmarks are this wrong is untrustworthy
+    // anyway. Pinned here so the ordering cannot be "fixed" the other way
+    // round without someone reading the JSDoc first.
+    const lm  = pose({ hw: 5, hh: 5, shDrop: 8 })
+    const reg = headRegion(lm, W, H)
+    expect(reg.r).toBe(MAX_RADIUS_FRACTION * Math.min(W, H))   // capped, 360px
+
+    // ...and with the radius capped, at least one face landmark really is
+    // outside. This is the honest statement of the guarantee's limit, not a
+    // bug: containment holds only while the radius is uncapped.
+    const outside = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].some(
+      (i) => Math.hypot(lm[i].x * W - reg.cx, lm[i].y * H - reg.cy) > reg.r
+    )
+    expect(outside).toBe(true)
+  })
+
   it('returns null for missing or empty landmarks', () => {
     expect(headRegion(null, W, H)).toBeNull()
     expect(headRegion([], W, H)).toBeNull()
@@ -148,10 +197,20 @@ describe('headRegion', () => {
 
 describe('headRegion — face landmark coverage', () => {
   // Indices 0-10: the eleven face landmarks the redaction exists to hide.
-  // Nothing before this test asserted they actually land INSIDE the
-  // returned circle — the profile test above only pins the radius against
-  // collapsing, never checks containment.
+  //
+  // Containment is now an INVARIANT, not an observation: headRegion() grows
+  // the radius to maxDistanceFromCentre × COVERAGE_MARGIN. So the floor these
+  // tests assert is the guarantee itself — every landmark must sit at least
+  // (1 - 1/COVERAGE_MARGIN) = 9.09% of r inside the circle — and anything
+  // above that floor is the heuristic over-covering on its own, which is
+  // reported per fixture but not pinned.
+  //
+  // The one documented exception is MAX_RADIUS_FRACTION, applied after the
+  // expansion and therefore overriding it; see the 'caps the radius' test.
   const FACE_IDX = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  // 1 - 1/1.10 = 0.0909…  The guaranteed slack, minus float slop.
+  const GUARANTEED_MARGIN = 1 - 1 / COVERAGE_MARGIN - 1e-9
 
   /** Returns { worstIdx, worstMargin } — margin is (r - dist) / r for the
    *  tightest landmark; negative means that landmark is OUTSIDE the circle. */
@@ -176,54 +235,69 @@ describe('headRegion — face landmark coverage', () => {
   it('contains every face landmark for a frontal pose', () => {
     const lm = pose()
     const { worstIdx, worstMargin } = assertAllInside(lm, headRegion(lm, W, H), 'frontal')
-    // Observed: worst landmark 9/10 (mouth), margin ≈ 24.55% of r.
+    // Observed: worst landmark 9 (mouth left), 105.11px vs r=139.30px —
+    // margin 24.55% of r. Heuristic-driven here; containment is inert.
     expect(worstIdx).toBeGreaterThanOrEqual(0)
-    expect(worstMargin).toBeGreaterThan(0)
+    expect(worstMargin).toBeGreaterThan(GUARANTEED_MARGIN)
   })
 
   it('contains every face landmark for a profile pose', () => {
     const lm = profilePose()
     const { worstMargin } = assertAllInside(lm, headRegion(lm, W, H), 'profile')
-    // Observed: worst landmark 9/10 (mouth), margin ≈ 25.55% of r.
-    expect(worstMargin).toBeGreaterThan(0)
+    // Observed: worst landmark 10 (mouth right), 103.71px vs r=139.30px —
+    // margin 25.55% of r. Heuristic-driven; containment inert.
+    expect(worstMargin).toBeGreaterThan(GUARANTEED_MARGIN)
   })
 
   it('contains every face landmark for a prone/rotated pose', () => {
     const lm = proneRotatedPose()
     const { worstMargin } = assertAllInside(lm, headRegion(lm, W, H), 'prone/rotated')
-    // Observed: worst landmark 8 (right ear), margin ≈ 31.80% of r.
-    expect(worstMargin).toBeGreaterThan(0)
+    // Observed: worst landmark 8 (right ear), 88.30px vs r=129.46px —
+    // margin 31.80% of r. Heuristic-driven; containment inert.
+    expect(worstMargin).toBeGreaterThan(GUARANTEED_MARGIN)
   })
 
-  // --- Genuine finding from review, reproduced with this file's own fixtures ---
+  // --- The case containment was added for -----------------------------
   //
-  // The three tests above use this file's default fixture proportions
-  // (shDrop=0.18), under which sFace always dominates sTorso and the torso
-  // estimator never actually engages — they exercise the "normal" path
-  // only. The "does not collapse in profile" test earlier in this file
-  // deliberately tightens shDrop to 0.10 to force the sFace/sTorso
-  // crossover; that closer framing is also common for a side-on knee/hip
-  // shot, and it is the scenario the reviewer's arithmetic flagged as
-  // marginal (sTorso taking over shrinks the profile radius well below the
-  // frontal one, while CRANIUM_NUDGE keeps pushing the centre toward the
-  // cranium, away from the mouth/jaw).
+  // The three fixtures above use shDrop=0.18, where sTorso dominates and the
+  // heuristic radius already over-covers by ~25-32%. This one is the close
+  // framing common to a side-on knee or hip shot (shDrop=0.10), sitting at
+  // the sFace/sTorso crossover: the torso estimator takes over in profile
+  // while CRANIUM_NUDGE keeps pushing the centre up toward the cranium and
+  // away from the mouth/jaw.
   //
-  // Reusing that exact fixture here reproduces the concern with this
-  // repo's real constants:
-  //   frontal.r ≈ 95.42px  (sFace wins)
-  //   profile.r ≈ 78.38px  (sTorso wins — the torso estimator takes over)
-  // and the mouth landmarks (9, 10) land OUTSIDE the circle by ~5% of r
-  // (~4px, ≈0.05 head-widths).
+  // BEFORE COVERAGE_MARGIN this was a real, reported gap:
+  //   profile.r = 78.38px, mouth landmark 9 at 82.40px — OUTSIDE by 5.13%
+  //   of r (~4px), i.e. an unblurred mouth and chin in a stored snapshot.
+  // It was carried as a deliberately failing canary rather than papered over
+  // by re-tuning HEAD_RADIUS_FACTOR / TORSO_SCALE_COEFF / CRANIUM_NUDGE.
   //
-  // Per instructions this is REPORTED, not silently fixed by tuning
-  // HEAD_RADIUS_FACTOR / TORSO_SCALE_COEFF / CRANIUM_NUDGE — see
-  // .superpowers/sdd/2026-08-05-face-blur-redaction/fix-wave-report.md.
-  // This test is intentionally left failing as a canary: it should only
-  // go green again once someone deliberately revisits those constants.
-  it('KNOWN GAP: close-framed profile pose (sTorso takeover) does not cover the mouth landmarks', () => {
-    const lm = profilePose({ shDrop: 0.10 })
+  // The containment term fixes it by construction rather than by tuning:
+  //   profile.r = 82.40 × 1.10 = 90.64px, worst margin exactly the
+  //   guaranteed 9.09%. Note the constants above are UNCHANGED — the fix is
+  //   the invariant, not a bigger fudge factor.
+  it('contains every face landmark for a close-framed profile pose (the sTorso-takeover gap)', () => {
+    const lm  = profilePose({ shDrop: 0.10 })
     const reg = headRegion(lm, W, H)
-    assertAllInside(lm, reg, 'profile (shDrop=0.10, close framing — sTorso takeover)')
+    const { worstIdx, worstMargin } =
+      assertAllInside(lm, reg, 'profile (shDrop=0.10, close framing — sTorso takeover)')
+
+    expect(worstIdx).toBe(9)                                  // mouth left, as before
+    expect(worstMargin).toBeGreaterThan(GUARANTEED_MARGIN)
+
+    // Pin that containment — not the heuristic — is what covers this frame.
+    // If someone deletes the containment term, r drops back to the heuristic
+    // 78.38px and the mouth is outside again.
+    expect(reg.r).toBeGreaterThan(85)                         // observed 90.64px
+  })
+
+  it('grows the radius only as far as containment needs — the heuristic still wins when it over-covers', () => {
+    // The containment term must be a FLOOR, not a replacement. Deleting the
+    // heuristic (r = rCovering alone) would shrink the frontal radius from
+    // 139.30px to 105.11 × 1.10 = 115.62px, dropping the cranium headroom
+    // the module exists to provide.
+    const reg = headRegion(pose(), W, H)
+    expect(reg.r).toBeGreaterThan(130)                        // observed 139.30px
   })
 })
 

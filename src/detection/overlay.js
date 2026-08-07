@@ -63,12 +63,18 @@ export class Overlay {
    * assigning ctx.filter is a silent no-op and a blur draw would emit a SHARP
    * face. The redaction degrades to an opaque fill instead — blur → solid,
    * never blur → nothing.
+   *
+   * Probes the SCRATCH canvas's context, because that is where the filter is
+   * actually applied (see _drawRedaction). Probing the overlay context would
+   * answer a question we no longer ask.
    */
   _detectFilterSupport() {
     try {
-      const probe = document.createElement('canvas').getContext('2d')
+      const probe = this._getScratch(1, 1).getContext('2d')
       probe.filter = 'blur(2px)'
-      return probe.filter === 'blur(2px)'
+      const ok = probe.filter === 'blur(2px)'
+      probe.filter = 'none'
+      return ok
     } catch (_) {
       return false
     }
@@ -230,6 +236,28 @@ export class Overlay {
    * composites this same canvas over the video frame, so both surfaces come
    * from this one code path and cannot drift apart.
    *
+   * WHERE THE BLUR IS APPLIED, AND WHY IT MATTERS.
+   *
+   * resize() leaves the OVERLAY context with a non-identity CTM
+   * (`setTransform(dpr,0,0,dpr,0,0)`) so the rest of this file can draw in CSS
+   * pixels. Whether Canvas 2D `filter` blur lengths are scaled by the CTM is
+   * not settled across engines. If they are NOT, a blur set on the overlay
+   * context lands at 1/dpr of its intended strength — on a dpr-3 iPhone that
+   * is an effective sigma of 0.35/3 ≈ 0.117 × head radius, badly
+   * under-blurred, while the session is still stamped 'blur1'. A redaction
+   * that silently weakens itself and still reports success is the worst
+   * failure mode this feature has.
+   *
+   * So the blur is applied on the SCRATCH canvas, whose CTM is the identity —
+   * the question becomes moot rather than being answered. The scratch is sized
+   * in DEVICE pixels (`ceil(g.size * dpr)`) so the patch is blurred at native
+   * resolution instead of being upsampled by dpr on the way out, and the blur
+   * radius is scaled to match. The scratch is then blitted to the overlay
+   * UNFILTERED, at CSS-pixel coordinates, inside the circular clip.
+   *
+   * redactionGeometry() is untouched: its padding = 2 × blurRadius coupling
+   * still holds, because both terms are scaled by the same dpr here.
+   *
    * @param {{cx:number,cy:number,r:number}|null} head - VIDEO pixel space
    * @param {HTMLVideoElement|null} video
    */
@@ -261,21 +289,29 @@ export class Overlay {
       const sy = (g.y - this._offsetY) / this._scale
       const ss = g.size / this._scale
 
-      const size    = Math.max(1, Math.ceil(g.size))
+      // Device pixels, matching how resize() sizes the overlay canvas itself.
+      const dpr     = window.devicePixelRatio || 1
+      const size    = Math.max(1, Math.ceil(g.size * dpr))
       const scratch = this._getScratch(size, size)
       const sctx    = scratch.getContext('2d')
 
-      // Fill opaque BEFORE blitting. Where the head sits near a frame edge the
-      // padded square runs off the video, leaving transparent scratch pixels —
-      // blurring toward transparent inside the clip would let the video show
-      // through. Blurring toward a solid colour cannot.
+      // Fill opaque BEFORE blitting, and unfiltered. Where the head sits near a
+      // frame edge the padded square runs off the video, leaving transparent
+      // scratch pixels — blurring toward transparent inside the clip would let
+      // the video show through. Blurring toward a solid colour cannot.
+      sctx.filter    = 'none'
       sctx.fillStyle = REDACTION_FILL
       sctx.fillRect(0, 0, size, size)
-      sctx.drawImage(video, sx, sy, ss, ss, 0, 0, size, size)
 
-      ctx.filter = `blur(${g.blurRadius}px)`
-      ctx.drawImage(scratch, g.x, g.y, g.size, g.size)
+      // The blur happens HERE, on the identity-CTM scratch context.
+      sctx.filter = `blur(${g.blurRadius * dpr}px)`
+      sctx.drawImage(video, sx, sy, ss, ss, 0, 0, size, size)
+      sctx.filter = 'none'
+
+      // Out to the overlay UNFILTERED — the pixels are already blurred, and a
+      // second filter here would be the very CTM-dependent blur this avoids.
       ctx.filter = 'none'
+      ctx.drawImage(scratch, g.x, g.y, g.size, g.size)
     } else {
       ctx.fillStyle = REDACTION_FILL
       ctx.fillRect(g.x, g.y, g.size, g.size)
