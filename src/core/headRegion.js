@@ -37,8 +37,8 @@ export const HEAD_RADIUS_FACTOR  = 0.85  // radius as a multiple of the scale es
 export const TORSO_SCALE_COEFF   = 0.70  // makes the torso estimate ≈ the face estimate frontally
 export const CRANIUM_NUDGE       = 0.35  // centre offset along the shoulders→head axis, as a fraction of r
 export const MAX_RADIUS_FRACTION = 0.50  // sanity cap against a garbage landmark frame
-export const ELLIPSE_ACROSS = 0.92  // seed semi-axis across the head axis, x rHeuristic
-export const ELLIPSE_ALONG  = 1.14  // seed semi-axis along it — a head is taller than wide
+export const ELLIPSE_ACROSS = 1.60  // seed semi-axis across the head axis, x rHeuristic
+export const ELLIPSE_ALONG  = 1.75  // seed semi-axis along it — a head is taller than wide
 export const FEATHER_EXTENT = 1.35  // alpha reaches 0 here, as a multiple of the core
 export const OUTLINE_AT     = 1.04  // outline sits just outside the core
 

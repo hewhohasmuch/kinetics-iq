@@ -181,14 +181,22 @@ describe('PoseDetector', () => {
     expect(result.head.cy).toBeLessThan(110)
     // Semi-axes should be substantial but not unreasonable for the fixture
     // geometry. Measured for this exact fixture (1280x720 video):
-    // rAcross ≈ 137.31px, rAlong ≈ 170.15px (rAlong > rAcross, as expected —
+    // rAcross ≈ 210.95px, rAlong ≈ 230.73px (rAlong > rAcross, as expected —
     // a head is taller than wide). Bounds below give ~10px of slack each
     // side, enough to catch a collapsed or ballooned ellipse without being
     // so tight the test pins float noise.
-    expect(result.head.rAcross).toBeGreaterThan(125)
-    expect(result.head.rAcross).toBeLessThan(150)
-    expect(result.head.rAlong).toBeGreaterThan(158)
-    expect(result.head.rAlong).toBeLessThan(182)
+    //
+    // RE-MEASURED after the hair-coverage fix raised headRegion.js's
+    // ELLIPSE_ACROSS/ELLIPSE_ALONG (0.92/1.14 -> 1.60/1.75) to stop windblown
+    // hair breaking the occluder's rim in the e2e fixture — see
+    // .superpowers/sdd/2026-08-08-head-occluder/task-7-report.md. Was
+    // rAcross ≈ 137.31px / rAlong ≈ 170.15px; confirmed visually via the e2e
+    // harness's exported peak/min-analysed.png that the larger ellipse is
+    // still a reasonable head-covering shape, not a runaway size.
+    expect(result.head.rAcross).toBeGreaterThan(200)
+    expect(result.head.rAcross).toBeLessThan(222)
+    expect(result.head.rAlong).toBeGreaterThan(220)
+    expect(result.head.rAlong).toBeLessThan(242)
   })
 
   it('returns head: null when no pose is detected', async () => {

@@ -247,14 +247,24 @@ describe('headRegion — oriented ellipse', () => {
     // FIXTURE CHOICE MATTERS HERE. The default pose() (shDrop: 0.18) does NOT
     // work: at COVERAGE_MARGIN 1.60 containment genuinely binds there, so the
     // correct formula and the `max(1, t) * COVERAGE_MARGIN` mutant would both
-    // produce growth > 1 and this test couldn't tell them apart. Measured:
-    //   shDrop=0.18  rHeuristic=139.30  growth=1.0666  (binds)
-    //   shDrop=0.22  rHeuristic=169.77  growth=1.0000  (inert)
-    //   shDrop=0.30  rHeuristic=230.70  growth=1.0000  (inert)
-    // shDrop: 0.30 is comfortably inside the inert region: the correct
-    // formula gives growth exactly 1.0 while the mutant gives 1.60 — a 60%
-    // error this assertion catches cleanly.
-    const lm = pose({ shDrop: 0.30 })
+    // produce growth > 1 and this test couldn't tell them apart.
+    //
+    // RE-MEASURED after the hair-coverage fix raised ELLIPSE_ACROSS/ALONG
+    // (0.92/1.14 -> 1.60/1.75, see headRegion.js): the previous fixture
+    // (shDrop: 0.30, rHeuristic=230.70) is no longer usable — the SEED itself
+    // (ELLIPSE_ALONG * rHeuristic = 403.72) now exceeds MAX_RADIUS_FRACTION's
+    // cap (360 at this test's 720x1280 frame) before containment even enters
+    // the picture, so the correct formula's output gets clipped to 360 and
+    // stops equalling the uncapped seed the assertion checks against.
+    //   shDrop=0.18  rHeuristic=139.30  seedAlong=243.78  growth=1.0000 (inert, but was 1.0666 pre-fix)
+    //   shDrop=0.22  rHeuristic=169.77  seedAlong=297.09  growth=1.0000  (inert, both axes under the 360 cap)
+    //   shDrop=0.30  rHeuristic=230.70  seedAlong=403.72  seed ALREADY exceeds the cap — unusable now
+    // shDrop: 0.22 is comfortably inert (measured growth exactly 1.0000, zero
+    // diff from the uncapped seed) and both semi-axes stay under the cap
+    // (271.63, 297.09 vs 360). The mutant is still caught: at 0.22 it would
+    // produce rAcross = min(271.63 * 1.60, 360) = 360, clearly distinct from
+    // the correct formula's 271.63.
+    const lm = pose({ shDrop: 0.22 })
     const idx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     const xs = idx.map((i) => lm[i].x * W)
     const ys = idx.map((i) => lm[i].y * H)
