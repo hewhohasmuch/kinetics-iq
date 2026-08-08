@@ -275,6 +275,79 @@ describe('PoseDetector', () => {
     // headResolved must catch that a face landmark is still on screen.
     expect(result.headResolved).toBe(false)
   })
+
+  // Landmarks for a head at (hx, hy) with shoulders below — enough spread for
+  // headRegion() to return a region.
+  //
+  // NOTE: the brief's version of this fixture left indices 1-6 (the eyes,
+  // part of headRegion.js's FACE_LANDMARKS = [0..10]) at makeLandmarks()'s
+  // default (0.5, 0.5). That default sits far from an off-center head, and
+  // FACE_LANDMARKS folds it into the bounding-box estimate — asymmetrically,
+  // since a head nearer to (0.5, 0.5) picks up less spurious spread than one
+  // farther away. At hx=0.30 that alone was enough to hit MAX_RADIUS_FRACTION's
+  // cap, breaking the "expands when the head moves" test regardless of
+  // whether motion expansion is wired correctly. Setting the eyes here (within
+  // the x/y extremes already spanned by the ears/mouth below, so the intended
+  // bounding box is unchanged) matches the canonical fixture convention in
+  // headRegion.test.js's pose(), where every FACE_LANDMARKS index is explicit.
+  function headLandmarks(hx = 0.5, hy = 0.25) {
+    const lm = makeLandmarks()
+    const at = (i, x, y) => { lm[i] = { x, y, z: 0, visibility: 0.95 } }
+    at(0, hx, hy)
+    at(1, hx - 0.02, hy); at(2, hx - 0.035, hy); at(3, hx - 0.05, hy)
+    at(4, hx + 0.02, hy); at(5, hx + 0.035, hy); at(6, hx + 0.05, hy)
+    at(7, hx - 0.06, hy); at(8, hx + 0.06, hy)
+    at(9, hx - 0.02, hy + 0.04); at(10, hx + 0.02, hy + 0.04)
+    at(11, hx - 0.10, hy + 0.18); at(12, hx + 0.10, hy + 0.18)
+    return lm
+  }
+
+  it('does not expand the head region on the first detection', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.5)] })
+    const first = detector.detect(makeVideoEl())
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.5)] })
+    const still = detector.detect(makeVideoEl())
+    expect(still.head.rAcross).toBeCloseTo(first.head.rAcross, 6)
+  })
+
+  it('expands the head region when the head moves between detections', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.30)] })
+    const a = detector.detect(makeVideoEl())
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.50)] })
+    const b = detector.detect(makeVideoEl())
+    expect(b.head.rAcross).toBeGreaterThan(a.head.rAcross)
+  })
+
+  it('does not compound expansion across frames', async () => {
+    // THE MUTANT THIS KILLS: storing the EXPANDED region as `_prevHead`. The
+    // stored value must be the raw region, or a head moving at constant speed
+    // grows the occluder without bound until it hits the cap.
+    await detector.init()
+    const xs = [0.30, 0.40, 0.50, 0.60]
+    const widths = []
+    for (const x of xs) {
+      mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(x)] })
+      widths.push(detector.detect(makeVideoEl()).head.rAcross)
+    }
+    // Steps 2, 3 and 4 all travel the same distance, so they must all expand
+    // by the same amount.
+    expect(widths[3]).toBeCloseTo(widths[2], 4)
+  })
+
+  it('clears motion state when the pose is lost, so a gap cannot carry a stale jump', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.30)] })
+    detector.detect(makeVideoEl())
+    mockDetectForVideo.mockReturnValue({ landmarks: [] })
+    detector.detect(makeVideoEl())                       // pose lost
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.70)] })
+    const after = detector.detect(makeVideoEl())
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.70)] })
+    const settled = detector.detect(makeVideoEl())
+    expect(after.head.rAcross).toBeCloseTo(settled.head.rAcross, 6)
+  })
 })
 
 describe('JOINT_CONFIG', () => {

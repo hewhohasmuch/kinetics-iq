@@ -1,5 +1,5 @@
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
-import { headRegion, headInputsFinite, anyFaceLandmarkInFrame } from '../core/headRegion.js'
+import { headRegion, headInputsFinite, anyFaceLandmarkInFrame, expandForMotion } from '../core/headRegion.js'
 
 const WASM_CDN  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
@@ -43,6 +43,11 @@ export class PoseDetector {
     this._initPromise = null
     this.joint        = 'knee'
     this.side         = 'right'
+    // Previous frame's RAW (unexpanded) head region, for motion expansion.
+    // Storing the raw one is load-bearing: storing the expanded region instead
+    // would compound growth every frame and inflate the occluder to the cap on
+    // any sustained movement.
+    this._prevHead    = null
   }
 
   // Load MediaPipe WASM and model. Safe to call multiple times — deduplicates.
@@ -83,12 +88,14 @@ export class PoseDetector {
   //     `headResolved` derivation below for the full case breakdown.
   detect(videoElement) {
     if (!this._ready || !videoElement) {
+      this._prevHead = null
       return { markers: {}, allFound: false, foundIds: [], head: null, headResolved: false }
     }
 
     const result = this._landmarker.detectForVideo(videoElement, performance.now())
 
     if (!result.landmarks || result.landmarks.length === 0) {
+      this._prevHead = null
       return { markers: {}, allFound: false, foundIds: [], head: null, headResolved: false }
     }
 
@@ -121,10 +128,16 @@ export class PoseDetector {
       }
     }
 
-    // Head circle for snapshot redaction. Independent of the joint roles — it
+    // Head ellipse for snapshot redaction. Independent of the joint roles — it
     // is computed from the face/shoulder landmarks, not from JOINT_CONFIG, so
     // it is present even when the measured joint is not fully visible.
-    const head = headRegion(lmNorm, vw, vh)
+    const rawHead = headRegion(lmNorm, vw, vh)
+
+    // Grow it to cover the head's travel since the last detection. See
+    // expandForMotion() for why: the overlay is composited over a video frame
+    // ~150ms newer than the landmarks that placed it.
+    const head = expandForMotion(rawHead, this._prevHead, vw, vh)
+    this._prevHead = rawHead
 
     // Whether `head` above is trustworthy enough to capture a snapshot from.
     // `head === null` is ambiguous by itself — it means EITHER a resolved
