@@ -301,6 +301,13 @@ export function headRegion(landmarksNorm, videoW, videoH) {
  */
 export function expandForMotion(region, prevRegion, videoW, videoH, gain = MOTION_GAIN) {
   if (!region || !prevRegion) return region
+  // Mirrors headRegion()'s guard at line 162. A <video> element can report 0
+  // between frames; without this, maxR is NaN and Math.min() poisons both
+  // semi-axes — a NaN ellipse draws no occluder at all, leaving the face
+  // visible on exactly the frames where something already went wrong. Returning
+  // the region unchanged is safe: it is still drawable, it just cannot be
+  // safely expanded.
+  if (!videoW || !videoH) return region
   if (!Number.isFinite(prevRegion.cx) || !Number.isFinite(prevRegion.cy)) return region
 
   const d = Math.hypot(region.cx - prevRegion.cx, region.cy - prevRegion.cy)

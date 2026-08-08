@@ -396,4 +396,16 @@ describe('expandForMotion', () => {
     const r = base()
     expect(expandForMotion(r, { ...base(), cx: NaN }, W, H)).toBe(r)
   })
+
+  it('returns the region untouched when the video dimensions are unusable', () => {
+    // Mirrors headRegion()'s own guard. A <video> element can report 0
+    // between frames; without this, maxR is NaN and Math.min() poisons BOTH
+    // semi-axes — a NaN ellipse draws no occluder at all, leaving the face
+    // visible on exactly the frames where something already went wrong.
+    const r = base()
+    const prev = { ...base(), cx: 260 }
+    expect(expandForMotion(r, prev, 0, 0)).toBe(r)
+    expect(expandForMotion(r, prev, NaN, 720)).toBe(r)
+    expect(expandForMotion(r, prev, 1280, undefined)).toBe(r)
+  })
 })
