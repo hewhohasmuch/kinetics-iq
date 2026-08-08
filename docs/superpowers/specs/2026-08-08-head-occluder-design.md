@@ -133,10 +133,15 @@ version used — centre first, because containment is measured *from* it:
 4. Project each face landmark into the ellipse's local frame (onto `u` and its
    perpendicular) and compute `t = max over landmarks of √((across/rAcross)² + (along/rAlong)²)`.
    This is the factor by which the seeded ellipse must grow to contain every one of them.
-5. Scale **both** semi-axes by `max(1, t) × COVERAGE_MARGIN`. Scaling both by the same factor
-   is what preserves the head-shaped aspect ratio; scaling them independently would let a
-   profile pose flatten the ellipse into the exact under-estimate the circle version was
-   designed to avoid.
+5. Scale **both** semi-axes by `max(1, t × COVERAGE_MARGIN)`. Note the placement of the
+   margin *inside* the `max`: this is the faithful analogue of today's
+   `r = max(rHeuristic, maxDist × COVERAGE_MARGIN)`, where the heuristic floor wins outright
+   when it already over-covers. Writing `max(1, t) × COVERAGE_MARGIN` instead would multiply
+   every region by 1.60 even when containment is inert, inflating the occluder on every
+   normal frame.
+   Scaling both axes by the same factor is what preserves the head-shaped aspect ratio;
+   scaling them independently would let a profile pose flatten the ellipse into the exact
+   under-estimate the circle version was designed to avoid.
 6. Apply the `MAX_RADIUS_FRACTION` cap **last**, to both axes.
 
 Same invariant, same reason: MediaPipe's eleven face landmarks bound the *face*, while the
