@@ -4,7 +4,7 @@ import {
   headInputsFinite, anyFaceLandmarkInFrame,
   MAX_RADIUS_FRACTION, COVERAGE_MARGIN, ELLIPSE_ACROSS, ELLIPSE_ALONG,
   HEAD_RADIUS_FACTOR, TORSO_SCALE_COEFF,
-  redactionGeometry,
+  redactionGeometry, FEATHER_EXTENT,
 } from './headRegion.js'
 
 const W = 720, H = 1280
@@ -407,5 +407,52 @@ describe('expandForMotion', () => {
     expect(expandForMotion(r, prev, 0, 0)).toBe(r)
     expect(expandForMotion(r, prev, NaN, 720)).toBe(r)
     expect(expandForMotion(r, prev, 1280, undefined)).toBe(r)
+  })
+})
+
+describe('occluderGeometry', () => {
+  const disp = { cx: 200, cy: 300, rAcross: 100, rAlong: 120, ux: 0, uy: -1 }
+
+  it('keeps the core exactly at the containment ellipse', () => {
+    // THE INVARIANT THE WHOLE DESIGN RESTS ON: softening happens strictly
+    // OUTSIDE the shape that provably contains every face landmark. A mutant
+    // that shrinks the core to make the feather start earlier trades the
+    // guarantee for looks.
+    const g = occluderGeometry(disp)
+    expect(g.core.rAcross).toBe(100)
+    expect(g.core.rAlong).toBe(120)
+  })
+
+  it('feathers and outlines outside the core, never inside', () => {
+    const g = occluderGeometry(disp)
+    expect(g.feather.rAcross).toBeGreaterThan(g.core.rAcross)
+    expect(g.feather.rAlong).toBeGreaterThan(g.core.rAlong)
+    expect(g.outline.rAcross).toBeGreaterThan(g.core.rAcross)
+  })
+
+  it('puts the gradient stop where the opaque core ends', () => {
+    // The gradient is drawn in a space scaled to the FEATHER extent, so the
+    // core boundary lands at core/feather = 1 / FEATHER_EXTENT. Getting this
+    // wrong is how the fade ends up starting at the centre.
+    const g = occluderGeometry(disp)
+    expect(g.innerStop).toBeCloseTo(1 / FEATHER_EXTENT, 9)
+    expect(g.innerStop).toBeCloseTo(g.core.rAcross / g.feather.rAcross, 9)
+    expect(g.innerStop).toBeCloseTo(g.core.rAlong / g.feather.rAlong, 9)
+  })
+
+  it('rotates so the long axis follows the head axis', () => {
+    // ctx.rotate(theta) maps the local y-axis to (-sin, cos); we need that to
+    // equal (ux, uy) so radiusY (rAlong) runs along the head.
+    for (const u of [{ ux: 0, uy: -1 }, { ux: -1, uy: 0 }, { ux: 0.6, uy: -0.8 }]) {
+      const g = occluderGeometry({ ...disp, ...u })
+      expect(-Math.sin(g.rotation)).toBeCloseTo(u.ux, 6)
+      expect(Math.cos(g.rotation)).toBeCloseTo(u.uy, 6)
+    }
+  })
+
+  it('returns null for a missing or degenerate region', () => {
+    expect(occluderGeometry(null)).toBeNull()
+    expect(occluderGeometry({ ...disp, rAcross: 0 })).toBeNull()
+    expect(occluderGeometry({ ...disp, rAlong: -1 })).toBeNull()
   })
 })

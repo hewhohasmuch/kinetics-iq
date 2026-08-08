@@ -40,18 +40,21 @@ export const MAX_RADIUS_FRACTION = 0.50  // sanity cap against a garbage landmar
 export const BLUR_RADIUS_FACTOR  = 0.35  // blur radius as a fraction of the display radius
 export const ELLIPSE_ACROSS = 0.92  // seed semi-axis across the head axis, x rHeuristic
 export const ELLIPSE_ALONG  = 1.14  // seed semi-axis along it — a head is taller than wide
+export const FEATHER_EXTENT = 1.35  // alpha reaches 0 here, as a multiple of the core
+export const OUTLINE_AT     = 1.04  // outline sits just outside the core
 
 /**
- * The containment guarantee. After the centre is placed, the radius is grown
- * until every one of the eleven face landmarks is inside the circle with this
+ * The containment guarantee. After the centre is placed, the ellipse semi-axes
+ * are grown until every one of the eleven face landmarks is inside it with this
  * much slack:
  *
- *   r = max(r_heuristic, maxDistanceFromCentreToAnyFaceLandmark × COVERAGE_MARGIN)
+ *   grow = max(1, t * COVERAGE_MARGIN)
  *
- * This is what turns "the heuristics probably cover the face" into an
- * invariant. Before it existed, a close-framed profile pose — where the torso
- * estimator takes over and CRANIUM_NUDGE keeps pushing the centre up toward
- * the cranium — left the mouth landmarks ~5% of r OUTSIDE the circle.
+ * where t is the factor by which the seeded ellipse must grow for every face
+ * landmark to sit inside. This turns "the heuristics probably cover the face"
+ * into an invariant. Before it existed, a close-framed profile pose — where the
+ * torso estimator takes over and CRANIUM_NUDGE keeps pushing the centre toward
+ * the cranium — left the mouth landmarks ~5% of r OUTSIDE.
  *
  * The margin is NOT mere slack — it carries the whole cranium. MediaPipe's
  * eleven face landmarks bound the FACE (eye line to mouth, ear to ear); the
@@ -322,11 +325,43 @@ export function expandForMotion(region, prevRegion, videoW, videoH, gain = MOTIO
 }
 
 /**
- * Derive the occluder fill geometry for a head region already mapped into
- * DISPLAY CSS PIXEL space.
- * Stub — implemented in Task 3.
+ * Derive the drawing geometry for a head ellipse already mapped into DISPLAY
+ * CSS PIXEL space.
+ *
+ * WHAT REPLACED WHAT, AND WHY. The blur version of this function returned a
+ * `blurRadius` and a `padding = 2 * blurRadius`. That padding existed only
+ * because a Canvas 2D blur fades to TRANSPARENT at its source image's edges,
+ * so the source square had to overhang the clip circle to keep the rim opaque.
+ * With an opaque fill there is no fade to hide and no source to overhang, so
+ * both are gone.
+ *
+ * THE CORE IS THE CONTAINMENT ELLIPSE, UNCHANGED. Every softening term here —
+ * the feather, the outline — is strictly OUTSIDE it, over background pixels
+ * that were never part of the head. That is what lets the occluder be made to
+ * look deliberate without weakening what it guarantees. Do not shrink the core
+ * to start the fade earlier.
+ *
+ * @param {{cx:number,cy:number,rAcross:number,rAlong:number,ux:number,uy:number}|null} displayRegion
  */
-export function occluderGeometry() { return null }
+export function occluderGeometry(displayRegion) {
+  if (!displayRegion) return null
+  const { cx, cy, rAcross, rAlong, ux, uy } = displayRegion
+  if (!(rAcross > 0) || !(rAlong > 0)) return null
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null
+
+  // ctx.rotate(theta) sends the local y-axis to (-sin theta, cos theta). We
+  // need that to be the head axis (ux, uy) so that radiusY = rAlong runs along
+  // the head and radiusX = rAcross runs across it.
+  const rotation = Math.atan2(-ux, uy)
+
+  return {
+    cx, cy, rotation,
+    core:    { rAcross, rAlong },
+    feather: { rAcross: rAcross * FEATHER_EXTENT, rAlong: rAlong * FEATHER_EXTENT },
+    outline: { rAcross: rAcross * OUTLINE_AT,     rAlong: rAlong * OUTLINE_AT },
+    innerStop: 1 / FEATHER_EXTENT,
+  }
+}
 
 /**
  * Derive the blur strength and the padded source square for a head circle
