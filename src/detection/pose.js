@@ -44,9 +44,16 @@ export class PoseDetector {
     this.joint        = 'knee'
     this.side         = 'right'
     // Previous frame's RAW (unexpanded) head region, for motion expansion.
-    // Storing the raw one is load-bearing: storing the expanded region instead
-    // would compound growth every frame and inflate the occluder to the cap on
-    // any sustained movement.
+    // Storing raw is currently DEFENSIVE, not load-bearing: expandForMotion()
+    // derives displacement only from prevRegion.cx/cy, and cx/cy are identical
+    // between a region and its expanded form (only rAcross/rAlong differ), so
+    // storing the expanded region here would produce identical output today.
+    // Storing raw is what keeps that equivalence from mattering if
+    // expandForMotion() ever starts reading the previous region's semi-axes —
+    // it is the contract that should hold regardless of what the function
+    // currently reads, so keep it even though no current test can tell the
+    // difference (see 'growth tracks each step, it does not accumulate across
+    // frames' in pose.test.js).
     this._prevHead    = null
   }
 

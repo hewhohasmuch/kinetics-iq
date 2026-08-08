@@ -312,18 +312,34 @@ describe('PoseDetector', () => {
   })
 
   it('expands the head region when the head moves between detections', async () => {
+    // Step size matters here: at hx 0.30→0.50 (256px of travel at
+    // videoW=1280), MOTION_GAIN=1 pushes rAcross straight into
+    // MAX_RADIUS_FRACTION's cap (360px on this 1280x720 frame) — the test
+    // would then be exercising the cap, not the `+ gain * d` growth formula
+    // it's named for. hx 0.30→0.35 (64px of travel) stays well clear of it:
+    // measured with this fixture, raw rAcross is ≈133.93px (translation-
+    // invariant — headRegion()'s scale comes from relative landmark
+    // distances, not absolute position, away from the frame edges), and the
+    // expanded result is ≈197.93px, comfortably under the 360px cap.
     await detector.init()
     mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.30)] })
     const a = detector.detect(makeVideoEl())
-    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.50)] })
+    mockDetectForVideo.mockReturnValue({ landmarks: [headLandmarks(0.35)] })
     const b = detector.detect(makeVideoEl())
     expect(b.head.rAcross).toBeGreaterThan(a.head.rAcross)
+    expect(b.head.rAcross).toBeLessThan(360)  // confirms this isn't just the cap
   })
 
-  it('does not compound expansion across frames', async () => {
-    // THE MUTANT THIS KILLS: storing the EXPANDED region as `_prevHead`. The
-    // stored value must be the raw region, or a head moving at constant speed
-    // grows the occluder without bound until it hits the cap.
+  it('growth tracks each step, it does not accumulate across frames', async () => {
+    // NOTE: this test does NOT discriminate storing the raw vs. the expanded
+    // region as `_prevHead`. expandForMotion() (src/core/headRegion.js) reads
+    // only prevRegion.cx/cy to compute displacement, and cx/cy are identical
+    // between a region and its expanded form (only rAcross/rAlong differ), so
+    // both storage choices currently produce the same sequence of outputs.
+    // What this test does verify: that growth is recomputed from each step's
+    // own displacement, not carried forward and re-added on top of the
+    // previous frame's already-grown radius — i.e. widths[3] must equal
+    // widths[2], not widths[2] plus another step's worth of growth.
     await detector.init()
     const xs = [0.30, 0.40, 0.50, 0.60]
     const widths = []

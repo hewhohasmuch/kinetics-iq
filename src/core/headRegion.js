@@ -296,7 +296,10 @@ export function headRegion(landmarksNorm, videoW, videoH) {
  * snapshot come from one draw. Over-covering there is free.
  *
  * @param {{cx:number,cy:number,rAcross:number,rAlong:number,ux:number,uy:number}|null} region
- * @param {object|null} prevRegion - the PREVIOUS frame's UNEXPANDED region
+ * @param {object|null} prevRegion - the previous frame's region; only its
+ *        centre (cx, cy) is read — rAcross/rAlong are ignored, so passing the
+ *        raw or the already-expanded previous region currently makes no
+ *        difference to the output
  * @param {number} videoW
  * @param {number} videoH
  * @param {number} [gain]
