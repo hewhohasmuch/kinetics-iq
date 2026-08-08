@@ -350,3 +350,50 @@ describe('headRegion — scale estimators stay load-bearing', () => {
     expect(profile.rAcross).toBeGreaterThan(110)
   })
 })
+
+describe('expandForMotion', () => {
+  const base = () => ({ cx: 300, cy: 400, rAcross: 100, rAlong: 120, ux: 0, uy: -1 })
+
+  it('returns the region untouched when there is no previous frame', () => {
+    const r = base()
+    expect(expandForMotion(r, null, W, H)).toBe(r)
+  })
+
+  it('returns the region untouched when the head has not moved', () => {
+    const r = base()
+    expect(expandForMotion(r, { ...base() }, W, H)).toBe(r)
+  })
+
+  it('grows both semi-axes by the displacement since the last detection', () => {
+    // The video element runs at 30fps while detection runs at 10Hz plus
+    // inference, so the occluder is drawn over a frame ~150ms newer than the
+    // landmarks that placed it. Growing by the last displacement covers the
+    // swept path instead of a stale point.
+    const prev = { ...base(), cx: 260, cy: 400 }     // moved 40px in x
+    const out  = expandForMotion(base(), prev, W, H)
+    expect(out.rAcross).toBeCloseTo(140, 6)
+    expect(out.rAlong).toBeCloseTo(160, 6)
+    expect(out.cx).toBe(300)                          // centre is NOT moved
+  })
+
+  it('covers where the head was as well as where it is', () => {
+    const prev = { ...base(), cx: 260, cy: 400 }
+    const out  = expandForMotion(base(), prev, W, H)
+    const dist = Math.hypot(prev.cx - out.cx, prev.cy - out.cy)
+    expect(dist).toBeLessThanOrEqual(out.rAcross)
+  })
+
+  it('stays subject to the radius cap', () => {
+    const prev = { ...base(), cx: -5000 }
+    const out  = expandForMotion(base(), prev, W, H)
+    const cap  = MAX_RADIUS_FRACTION * Math.min(W, H)
+    expect(out.rAcross).toBeLessThanOrEqual(cap)
+    expect(out.rAlong).toBeLessThanOrEqual(cap)
+  })
+
+  it('returns null input unchanged and ignores a non-finite previous centre', () => {
+    expect(expandForMotion(null, base(), W, H)).toBeNull()
+    const r = base()
+    expect(expandForMotion(r, { ...base(), cx: NaN }, W, H)).toBe(r)
+  })
+})

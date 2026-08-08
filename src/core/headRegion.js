@@ -62,6 +62,7 @@ export const ELLIPSE_ALONG  = 1.14  // seed semi-axis along it — a head is tal
  * left sharp in the stored image.
  */
 export const COVERAGE_MARGIN     = 1.60
+export const MOTION_GAIN         = 1.0  // occluder growth per pixel of inter-frame head travel
 
 const FACE_LANDMARKS  = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 const LEFT_SHOULDER   = 11
@@ -272,11 +273,46 @@ export function headRegion(landmarksNorm, videoW, videoH) {
 }
 
 /**
- * Expand a head region to cover motion blur across a frame interval.
- * Stub — implemented in Task 2.
- * @param {{cx:number, cy:number, rAcross:number, rAlong:number, ux:number, uy:number}} region
+ * Grow a head region to cover the distance the head travelled since the last
+ * detection.
+ *
+ * WHY THIS EXISTS. Detection runs at 10Hz plus BlazePose inference (~150ms end
+ * to end) while the <video> element underneath keeps playing at 30fps, so the
+ * overlay is positioned from landmarks that are already stale by the time it is
+ * composited over the live preview. At walking pace that is 80-90px — about one
+ * head radius, which is exactly the offset seen in tmp/blur1.jpg. Growing the
+ * shape by the last displacement covers the swept path instead of a stale
+ * point.
+ *
+ * The CENTRE is deliberately not moved. Extrapolating it forward would guess at
+ * a velocity from two samples and can overshoot off the head entirely; growing
+ * is strictly conservative — it only ever covers more.
+ *
+ * The STORED snapshot does not need this (it composites over the same buffered
+ * frame the landmarks came from) but gets it anyway, because preview and
+ * snapshot come from one draw. Over-covering there is free.
+ *
+ * @param {{cx:number,cy:number,rAcross:number,rAlong:number,ux:number,uy:number}|null} region
+ * @param {object|null} prevRegion - the PREVIOUS frame's UNEXPANDED region
+ * @param {number} videoW
+ * @param {number} videoH
+ * @param {number} [gain]
+ * @returns the same reference when there is nothing to expand, else a new region
  */
-export function expandForMotion(region) { return region }
+export function expandForMotion(region, prevRegion, videoW, videoH, gain = MOTION_GAIN) {
+  if (!region || !prevRegion) return region
+  if (!Number.isFinite(prevRegion.cx) || !Number.isFinite(prevRegion.cy)) return region
+
+  const d = Math.hypot(region.cx - prevRegion.cx, region.cy - prevRegion.cy)
+  if (!Number.isFinite(d) || d <= 0) return region
+
+  const maxR = MAX_RADIUS_FRACTION * Math.min(videoW, videoH)
+  return {
+    ...region,
+    rAcross: Math.min(region.rAcross + gain * d, maxR),
+    rAlong:  Math.min(region.rAlong  + gain * d, maxR),
+  }
+}
 
 /**
  * Derive the occluder fill geometry for a head region already mapped into
