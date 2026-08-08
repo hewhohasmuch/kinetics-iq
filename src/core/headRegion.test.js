@@ -226,11 +226,100 @@ describe('headRegion — oriented ellipse', () => {
     // landmark ends at q = 1 / COVERAGE_MARGIN. Where the heuristic floor
     // wins outright the worst q is smaller still. Either way this bound holds
     // while the shape is uncapped.
+    //
+    // THIS TEST NO LONGER EXERCISES THE BINDING BRANCH. Re-measured after the
+    // hair-coverage fix raised ELLIPSE_ACROSS/ALONG (0.92/1.14 -> 1.60/1.75):
+    // the larger seed now comfortably contains all four fixtures below
+    // WITHOUT growing, i.e. containment is INERT for every one of them
+    // (growth = max(1, t*margin) = 1 in each case). Measured:
+    //   pose() shDrop=0.18:              worstQ=0.4323  (inert)
+    //   profilePose() shDrop=0.18:       worstQ=0.4255  (inert)
+    //   profilePose shDrop=0.10 (close): worstQ=0.6008  (inert — close, but
+    //                                     under 1/COVERAGE_MARGIN=0.625)
+    //   proneRotatedPose():              worstQ=0.3899  (inert)
+    // The bound below still holds (worst <= 1/margin) because inert q values
+    // are all smaller than the guaranteed post-growth q — but this test
+    // cannot fail if the binding formula regresses, since growth==1 for every
+    // fixture it uses. See 'binds and stays contained under a tight close
+    // framing' below for the test that actually exercises growth > 1.
     for (const lm of [pose(), profilePose(), profilePose({ shDrop: 0.10 }), proneRotatedPose()]) {
       const reg = headRegion(lm, W, H)
       const worst = Math.max(...FACE_IDX.map((i) => ellipseQ(reg, lm[i].x * W, lm[i].y * H)))
       expect(worst).toBeLessThanOrEqual(1 / COVERAGE_MARGIN + 1e-9)
     }
+  })
+
+  it('binds and stays contained under a tight close framing', () => {
+    // THE GAP THIS FILLS. After the hair-coverage fix raised ELLIPSE_ACROSS/
+    // ALONG (0.92/1.14 -> 1.60/1.75), every fixture above the wide seed makes
+    // inert — none of them ever exercises the `t * COVERAGE_MARGIN` binding
+    // branch of `grow = Math.max(1, t * COVERAGE_MARGIN)`. That leaves the
+    // Task 1 mutant (`Math.max(1, t) * COVERAGE_MARGIN` — full margin applied
+    // to EVERY region, not just ones that need it) and a silently-lowered
+    // COVERAGE_MARGIN both undetectable by the whole suite.
+    //
+    // AN OUTLIER FACE LANDMARK (the reviewer's suggestion — displace one
+    // landmark, e.g. the ear, well away from the rest) was tried first and
+    // does NOT work under the new constants: displacing landmark 8 shifts the
+    // face centroid, which rotates the shoulders->face axis (ux, uy) toward
+    // the outlier as it moves further away. That rotation lets the ellipse
+    // cover the point with its LONGER axis (rAlong) instead of forcing rAcross
+    // to grow, so the achievable worst-q has a hard numerical ceiling around
+    // 0.61 — verified by scanning displacements from 40px to 32,000px (at
+    // both the 720x1280 fixture size and a 3000x3000 canvas, to rule out the
+    // frame-relative MAX_RADIUS_FRACTION cap as the cause) — and 0.61 never
+    // reaches the 0.625 needed for t*COVERAGE_MARGIN to exceed 1. Past a
+    // certain displacement the region hits MAX_RADIUS_FRACTION's cap instead,
+    // which exercises the ALREADY-tested 'cap overrides containment' branch,
+    // not this one.
+    //
+    // TIGHT CLOSE FRAMING binds instead, cleanly, and is just as realistic —
+    // it is the same scenario 'leaves the guaranteed slack' already used at
+    // shDrop=0.10 (worstQ=0.6008, inert), pushed closer. Below shDrop≈0.09
+    // sTorso drops under sFace and stops mattering, so sFace (fixed by the
+    // 0.15 profile-compression factor, independent of shDrop) takes over the
+    // scale estimate and the fixture becomes stable — shDrop 0.02 through
+    // 0.09 all measure identically. Measured at shDrop=0.06 by replicating
+    // headRegion()'s internals up to the pre-growth containment factor t:
+    //   t (worst q against the SEED ellipse, before growth) = 0.7074
+    //   correct formula: growth = max(1, 0.7074*1.60) = 1.1318  -> BINDS
+    //   mutant formula:  growth = max(1, 0.7074)*1.60 = 1.6000  (always the
+    //                    full margin, since t < 1 here)
+    //   seedAcross=99.07 -> correct rAcross=112.12, mutant rAcross=158.51
+    // Both semi-axes stay far under MAX_RADIUS_FRACTION's cap (360 at this
+    // fixture's 720x1280 frame; actual rAcross=112.12, rAlong=122.64), so the
+    // divergence is genuinely from containment growth, not the cap.
+    //
+    // Mutation-tested by hand: temporarily changing headRegion.js's grow line
+    // to `Math.max(1, t) * COVERAGE_MARGIN` makes this test fail (worst q
+    // becomes ~0.442, not ~0.625 — see below); reverting restores green. See
+    // task-8 fix report for both console outputs.
+    const lm = profilePose({ shDrop: 0.06 })
+    const reg = headRegion(lm, W, H)
+
+    // 1. Containment still holds: every face landmark inside the ellipse.
+    for (const i of FACE_IDX) {
+      const q = ellipseQ(reg, lm[i].x * W, lm[i].y * H)
+      expect(q, `landmark ${i} q=${q.toFixed(4)}`).toBeLessThanOrEqual(1)
+    }
+
+    // 2. Size is governed by containment, not the seed. When growth binds
+    // (t * COVERAGE_MARGIN > 1, as it does here), the worst landmark lands
+    // EXACTLY on q = 1 / COVERAGE_MARGIN by construction of the formula
+    // (final radius = seed * t * margin, so worst q = t / (t*margin) =
+    // 1/margin) — regardless of the exact t. The mutant instead applies a
+    // FIXED max(1,t)*margin = 1*1.60 = 1.60 growth whenever t < 1 (true
+    // here), which is unrelated to this fixture's actual t, and lands the
+    // worst landmark at ~0.442, not ~0.625 — a mutant run of this exact
+    // assertion is what caught that (see task-8 fix report).
+    const worst = Math.max(...FACE_IDX.map((i) => ellipseQ(reg, lm[i].x * W, lm[i].y * H)))
+    expect(worst).toBeCloseTo(1 / COVERAGE_MARGIN, 6)
+
+    // Sanity: confirm we are actually testing the uncapped binding branch,
+    // not the cap-override branch (already covered by 'caps both semi-axes').
+    const cap = MAX_RADIUS_FRACTION * Math.min(W, H)
+    expect(reg.rAcross).toBeLessThan(cap)
+    expect(reg.rAlong).toBeLessThan(cap)
   })
 
   it('does not inflate a region the heuristic already covers', () => {
