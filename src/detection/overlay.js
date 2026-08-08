@@ -335,6 +335,9 @@ export class Overlay {
   /** @returns {{r,g,b}|null} average of frame pixels OUTSIDE the head ellipse */
   _sampleNeutral(head, frame) {
     if (!frame || typeof document === 'undefined') return null
+    // Deliberately broad: any failure here must cost only the fill colour,
+    // never the redaction. A narrowed catch that rethrows would propagate out
+    // of _occluderFill and skip the draw entirely, leaving the face sharp.
     try {
       // Axis-aligned half-extents of the oriented ellipse.
       const hx = Math.hypot(head.rAcross * head.uy, head.rAlong * head.ux) * SAMPLE_RING

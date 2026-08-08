@@ -132,14 +132,19 @@ describe('Overlay._drawRedaction', () => {
     expect(stops.at(-1).offset).toBe(1)
   })
 
-  it('sets globalAlpha explicitly to 1', () => {
-    // The other helpers in overlay.js leave globalAlpha dirty, and a
-    // translucent redaction leaks the sharp face straight through.
+  it('sets globalAlpha explicitly to 1 in every drawing block', () => {
+    // The recording double's save()/restore() do not restore state the way a
+    // real Canvas 2D context does, so checking only the FIRST set:globalAlpha
+    // call would miss a regression that dropped the outline block's own
+    // reset. Assert every occurrence is 1, and that there are at least two —
+    // one per block (core+feather, outline).
     stubWindow(2)
     stubDocument()
     const { canvas, calls } = createOverlayCanvas()
     makeOverlay(canvas)._drawRedaction(HEAD, fakeFrame)
-    expect(calls.find((c) => c.name === 'set:globalAlpha').args[0]).toBe(1)
+    const alphaSets = calls.filter((c) => c.name === 'set:globalAlpha')
+    expect(alphaSets.length).toBeGreaterThanOrEqual(2)
+    for (const s of alphaSets) expect(s.args[0]).toBe(1)
   })
 
   it('orients and scales the shape to the head ellipse', () => {
@@ -162,6 +167,30 @@ describe('Overlay._drawRedaction', () => {
     const outline = calls.find((c) => c.name === 'ellipse')
     expect(outline.args[2]).toBeCloseTo(40 * OUTLINE_AT, 6)
     expect(outline.args[3]).toBeCloseTo(50 * OUTLINE_AT, 6)
+
+    // POSITIONAL, DELIBERATELY. `calls.find((c) => c.name === 'scale')` above
+    // always returns the FIRST scale in the whole sequence — the core
+    // block's — and would not notice a regression that reintroduced a scale
+    // call inside the outline block too. The recording double also logs
+    // ellipse()'s arguments verbatim, without applying any prior scale, so a
+    // naive "was scale ever called with these values" check can't catch it
+    // either. Find the save that opens the outline block (the nearest one
+    // before its ellipse() call) and assert no scale call falls between
+    // them. Do not "simplify" this back to a .find() — that is exactly the
+    // form that let the regression through.
+    const ellipseIdx = calls.findIndex((c) => c.name === 'ellipse')
+    let outlineSaveIdx = -1
+    for (let i = ellipseIdx - 1; i >= 0; i--) {
+      if (calls[i].name === 'save') { outlineSaveIdx = i; break }
+    }
+    expect(outlineSaveIdx, 'no save() precedes the outline ellipse() call').toBeGreaterThan(-1)
+    const scaleBetween = calls.some(
+      (c, i) => c.name === 'scale' && i > outlineSaveIdx && i < ellipseIdx,
+    )
+    expect(
+      scaleBetween,
+      'ctx.scale() between the outline save and its ellipse() would distort the stroke thickness anisotropically',
+    ).toBe(false)
   })
 
   it('maps video pixel space to display space before drawing', () => {
@@ -184,6 +213,19 @@ describe('Overlay._drawRedaction', () => {
     const { canvas, calls } = createOverlayCanvas()
     makeOverlay(canvas)._drawRedaction(null, fakeFrame)
     expect(calls.map((c) => c.name)).not.toContain('fill')
+  })
+
+  it('draws nothing when the geometry is degenerate', () => {
+    // occluderGeometry() returns null when a semi-axis is non-positive (e.g.
+    // rAcross: 0). _drawRedaction must no-op cleanly rather than drawing a
+    // collapsed shape.
+    stubWindow(1)
+    stubDocument()
+    const { canvas, calls } = createOverlayCanvas()
+    const degenerate = { ...HEAD, rAcross: 0 }
+    makeOverlay(canvas)._drawRedaction(degenerate, fakeFrame)
+    expect(calls.map((c) => c.name)).not.toContain('fill')
+    expect(calls.map((c) => c.name)).not.toContain('stroke')
   })
 
   it('still masks when the frame is unavailable, falling back to a fixed fill', () => {
