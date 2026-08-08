@@ -292,8 +292,7 @@ describe('headRegion — oriented ellipse', () => {
     //
     // Mutation-tested by hand: temporarily changing headRegion.js's grow line
     // to `Math.max(1, t) * COVERAGE_MARGIN` makes this test fail (worst q
-    // becomes ~0.442, not ~0.625 — see below); reverting restores green. See
-    // task-8 fix report for both console outputs.
+    // becomes ~0.442, not ~0.625 — see below); reverting restores green.
     const lm = profilePose({ shDrop: 0.06 })
     const reg = headRegion(lm, W, H)
 
@@ -311,7 +310,7 @@ describe('headRegion — oriented ellipse', () => {
     // FIXED max(1,t)*margin = 1*1.60 = 1.60 growth whenever t < 1 (true
     // here), which is unrelated to this fixture's actual t, and lands the
     // worst landmark at ~0.442, not ~0.625 — a mutant run of this exact
-    // assertion is what caught that (see task-8 fix report).
+    // assertion is what caught that.
     const worst = Math.max(...FACE_IDX.map((i) => ellipseQ(reg, lm[i].x * W, lm[i].y * H)))
     expect(worst).toBeCloseTo(1 / COVERAGE_MARGIN, 6)
 
