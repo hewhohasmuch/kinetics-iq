@@ -4,7 +4,7 @@ import {
   headInputsFinite, anyFaceLandmarkInFrame,
   MAX_RADIUS_FRACTION, COVERAGE_MARGIN, ELLIPSE_ACROSS, ELLIPSE_ALONG,
   HEAD_RADIUS_FACTOR, TORSO_SCALE_COEFF,
-  redactionGeometry, FEATHER_EXTENT,
+  FEATHER_EXTENT,
 } from './headRegion.js'
 
 const W = 720, H = 1280
@@ -172,27 +172,6 @@ describe('anyFaceLandmarkInFrame', () => {
     expect(anyFaceLandmarkInFrame(null, W, H)).toBe(false)
     expect(anyFaceLandmarkInFrame([], W, H)).toBe(false)
     expect(anyFaceLandmarkInFrame(pose(), 0, 0)).toBe(false)
-  })
-})
-
-describe('redactionGeometry', () => {
-  it('pads the source square by twice the blur radius', () => {
-    const g = redactionGeometry({ cx: 200, cy: 300, r: 100 })
-    expect(g.padding).toBeCloseTo(2 * g.blurRadius)
-    expect(g.size).toBeCloseTo(2 * (100 + g.padding))
-    expect(g.x).toBeCloseTo(200 - g.size / 2)
-    expect(g.y).toBeCloseTo(300 - g.size / 2)
-  })
-
-  it('scales blur strength with head size, so a close-up is not under-blurred', () => {
-    const near = redactionGeometry({ cx: 0, cy: 0, r: 200 })
-    const far  = redactionGeometry({ cx: 0, cy: 0, r: 50 })
-    expect(near.blurRadius).toBeGreaterThan(far.blurRadius * 3)
-  })
-
-  it('returns null for a missing or degenerate region', () => {
-    expect(redactionGeometry(null)).toBeNull()
-    expect(redactionGeometry({ cx: 1, cy: 1, r: 0 })).toBeNull()
   })
 })
 

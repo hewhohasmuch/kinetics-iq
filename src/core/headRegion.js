@@ -37,7 +37,6 @@ export const HEAD_RADIUS_FACTOR  = 0.85  // radius as a multiple of the scale es
 export const TORSO_SCALE_COEFF   = 0.70  // makes the torso estimate ≈ the face estimate frontally
 export const CRANIUM_NUDGE       = 0.35  // centre offset along the shoulders→head axis, as a fraction of r
 export const MAX_RADIUS_FRACTION = 0.50  // sanity cap against a garbage landmark frame
-export const BLUR_RADIUS_FACTOR  = 0.35  // blur radius as a fraction of the display radius
 export const ELLIPSE_ACROSS = 0.92  // seed semi-axis across the head axis, x rHeuristic
 export const ELLIPSE_ALONG  = 1.14  // seed semi-axis along it — a head is taller than wide
 export const FEATHER_EXTENT = 1.35  // alpha reaches 0 here, as a multiple of the core
@@ -363,34 +362,5 @@ export function occluderGeometry(displayRegion) {
     feather: { rAcross: rAcross * FEATHER_EXTENT, rAlong: rAlong * FEATHER_EXTENT },
     outline: { rAcross: rAcross * OUTLINE_AT,     rAlong: rAlong * OUTLINE_AT },
     innerStop: 1 / FEATHER_EXTENT,
-  }
-}
-
-/**
- * Derive the blur strength and the padded source square for a head circle
- * already mapped into DISPLAY CSS PIXEL space.
- *
- * A canvas blur() filter fades to transparent at the SOURCE IMAGE's edges.
- * Padding the source square by twice the blur radius puts that soft edge
- * outside the clip circle, so the circle comes out uniformly opaque and no
- * sharp face pixels leak around its rim.
- *
- * @param {{cx:number, cy:number, r:number}|null} displayRegion
- * @returns {{blurRadius:number, padding:number, x:number, y:number, size:number}|null}
- */
-export function redactionGeometry(displayRegion) {
-  if (!displayRegion || !(displayRegion.r > 0)) return null
-  const { cx, cy, r } = displayRegion
-
-  const blurRadius = Math.max(1, BLUR_RADIUS_FACTOR * r)
-  const padding    = 2 * blurRadius
-  const half       = r + padding
-
-  return {
-    blurRadius,
-    padding,
-    x:    cx - half,
-    y:    cy - half,
-    size: 2 * half,
   }
 }
