@@ -179,9 +179,16 @@ describe('PoseDetector', () => {
     // Unnudged face centroid would be at 142.69; with CRANIUM_NUDGE applied, cy ≈ 96.5.
     // Assert it's well below the unnudged value to prove the nudge is applied.
     expect(result.head.cy).toBeLessThan(110)
-    // Radius should be substantial but not unreasonable for the fixture geometry
-    expect(result.head.r).toBeGreaterThan(120)
-    expect(result.head.r).toBeLessThan(145)
+    // Semi-axes should be substantial but not unreasonable for the fixture
+    // geometry. Measured for this exact fixture (1280x720 video):
+    // rAcross ≈ 137.31px, rAlong ≈ 170.15px (rAlong > rAcross, as expected —
+    // a head is taller than wide). Bounds below give ~10px of slack each
+    // side, enough to catch a collapsed or ballooned ellipse without being
+    // so tight the test pins float noise.
+    expect(result.head.rAcross).toBeGreaterThan(125)
+    expect(result.head.rAcross).toBeLessThan(150)
+    expect(result.head.rAlong).toBeGreaterThan(158)
+    expect(result.head.rAlong).toBeLessThan(182)
   })
 
   it('returns head: null when no pose is detected', async () => {
@@ -208,7 +215,8 @@ describe('PoseDetector', () => {
     expect('distal' in result.markers).toBe(false)
     // But the head region is computed from face/shoulder landmarks, not gated by joint visibility
     expect(result.head).not.toBeNull()
-    expect(result.head.r).toBeGreaterThan(0)
+    expect(result.head.rAcross).toBeGreaterThan(0)
+    expect(result.head.rAlong).toBeGreaterThan(0)
   })
 
   it('returns headResolved: true on a normal pose', async () => {

@@ -1,8 +1,8 @@
 /**
  * headRegion.js
  *
- * Locates the patient's head in a MediaPipe pose result so it can be blurred
- * out of the session snapshots.
+ * Locates the patient's head in a MediaPipe pose result, as an oriented
+ * ellipse, so it can be blurred out of the session snapshots.
  *
  * PURE GEOMETRY — no DOM, no canvas. Fully testable in Node.
  *
@@ -38,6 +38,8 @@ export const TORSO_SCALE_COEFF   = 0.70  // makes the torso estimate ≈ the fac
 export const CRANIUM_NUDGE       = 0.35  // centre offset along the shoulders→head axis, as a fraction of r
 export const MAX_RADIUS_FRACTION = 0.50  // sanity cap against a garbage landmark frame
 export const BLUR_RADIUS_FACTOR  = 0.35  // blur radius as a fraction of the display radius
+export const ELLIPSE_ACROSS = 0.92  // seed semi-axis across the head axis, x rHeuristic
+export const ELLIPSE_ALONG  = 1.14  // seed semi-axis along it — a head is taller than wide
 
 /**
  * The containment guarantee. After the centre is placed, the radius is grown
@@ -136,20 +138,23 @@ export function anyFaceLandmarkInFrame(landmarksNorm, videoW, videoH) {
  * @param {Array<{x:number,y:number}>|null} landmarksNorm - MediaPipe normalised (0–1) landmarks
  * @param {number} videoW - intrinsic video width in pixels
  * @param {number} videoH - intrinsic video height in pixels
- * @returns {{cx:number, cy:number, r:number}|null} circle in VIDEO PIXEL space,
- *          or null when there is no head in the picture to redact
+ * @returns {{cx:number, cy:number, rAcross:number, rAlong:number, ux:number, uy:number}|null}
+ *          oriented ellipse in VIDEO PIXEL space — `(ux, uy)` is the unit
+ *          shoulders→head axis, `rAlong` is the semi-axis along it, `rAcross`
+ *          the semi-axis perpendicular to it — or null when there is no head
+ *          in the picture to redact
  *
- * CONTAINMENT, AND ITS ONE EXCEPTION. The returned circle contains every face
+ * CONTAINMENT, AND ITS ONE EXCEPTION. The returned ellipse contains every face
  * landmark with COVERAGE_MARGIN of slack — by construction, not by hoping the
  * heuristics were generous enough. The one exception is MAX_RADIUS_FRACTION,
  * which is applied LAST and therefore WINS: on a garbage landmark frame the
- * sanity cap takes precedence over containment, because a circle covering half
- * the frame is its own failure. **Containment is guaranteed only when the
- * radius is not capped** — i.e. when
- * `r < MAX_RADIUS_FRACTION × min(videoW, videoH)`. A capped frame is by
- * definition one whose landmarks are not to be trusted anyway; callers that
- * need a hard guarantee should treat a capped result as unreliable rather than
- * as proof the face is covered.
+ * sanity cap takes precedence over containment, because an ellipse covering
+ * half the frame is its own failure. **Containment is guaranteed only when
+ * neither semi-axis is capped** — i.e. when both
+ * `rAcross, rAlong < MAX_RADIUS_FRACTION × min(videoW, videoH)`. A capped
+ * frame is by definition one whose landmarks are not to be trusted anyway;
+ * callers that need a hard guarantee should treat a capped result as
+ * unreliable rather than as proof the face is covered.
  */
 export function headRegion(landmarksNorm, videoW, videoH) {
   if (!landmarksNorm || landmarksNorm.length <= RIGHT_SHOULDER) return null
@@ -183,7 +188,7 @@ export function headRegion(landmarksNorm, videoW, videoH) {
   // invariant, which is what makes this work for a patient lying down with
   // the camera at any rotation.
   let sTorso = 0
-  let upX = 0, upY = -1          // fallback: screen-up, if shoulders are absent
+  let ux = 0, uy = -1          // fallback: screen-up, if shoulders are absent
   const ls = landmarksNorm[LEFT_SHOULDER]
   const rs = landmarksNorm[RIGHT_SHOULDER]
   if (ls && rs) {
@@ -193,7 +198,7 @@ export function headRegion(landmarksNorm, videoW, videoH) {
     const dy  = faceY - shY
     const d   = Math.hypot(dx, dy)
     sTorso = TORSO_SCALE_COEFF * d
-    if (d > 1e-6) { upX = dx / d; upY = dy / d }
+    if (d > 1e-6) { ux = dx / d; uy = dy / d }
   }
 
   const scale = Math.max(sFace, sTorso)
@@ -201,44 +206,84 @@ export function headRegion(landmarksNorm, videoW, videoH) {
 
   const maxR = MAX_RADIUS_FRACTION * Math.min(videoW, videoH)
 
-  // The heuristic radius. It sets the CENTRE (via CRANIUM_NUDGE) and acts as
-  // the floor on the final radius — it is what covers the cranium and hair,
-  // which have no landmarks of their own to be contained.
+  // The heuristic radius. It places the CENTRE (via CRANIUM_NUDGE), seeds the
+  // semi-axes, and acts as the floor on the final size — it is what covers the
+  // cranium and hair, which have no landmarks of their own to be contained.
   //
   // Capped HERE as well as at the end, which is what keeps the centre finite
-  // and on-frame for a garbage landmark frame. Without it, a nonsense scale
-  // nudges the centre thousands of pixels away and the whole region is
-  // discarded as off-frame — i.e. no redaction at all on the very frames
-  // least worth trusting.
+  // and on-frame for a garbage landmark frame.
   const rHeuristic = Math.min(HEAD_RADIUS_FACTOR * scale, maxR)
 
-  const cx = faceX + upX * (CRANIUM_NUDGE * rHeuristic)
-  const cy = faceY + upY * (CRANIUM_NUDGE * rHeuristic)
+  const cx = faceX + ux * (CRANIUM_NUDGE * rHeuristic)
+  const cy = faceY + uy * (CRANIUM_NUDGE * rHeuristic)
 
-  // CONTAINMENT TERM. Grow the radius until every face landmark is provably
-  // inside, with COVERAGE_MARGIN of slack. Must come after the centre, since
-  // it measures from it. Where the heuristics already over-cover — the normal
-  // case — this term is inert and rHeuristic wins unchanged.
-  let maxDist = 0
+  // Seed the ellipse from the heuristic, then grow it to contain.
+  let rAcross = ELLIPSE_ACROSS * rHeuristic
+  let rAlong  = ELLIPSE_ALONG  * rHeuristic
+  if (!(rAcross > 0) || !(rAlong > 0)) return null
+
+  // Perpendicular to the head axis. (ux, uy) and (px, py) form the ellipse's
+  // local frame; both are unit vectors, so the projections below are distances.
+  const px = -uy, py = ux
+
+  // CONTAINMENT TERM, elliptical. `t` is the factor by which the seeded
+  // ellipse must grow for every face landmark to sit inside it.
+  let t = 0
   for (const p of facePts) {
-    const d = Math.hypot(p.x - cx, p.y - cy)
-    if (d > maxDist) maxDist = d
+    const dx = p.x - cx
+    const dy = p.y - cy
+    const across = dx * px + dy * py
+    const along  = dx * ux + dy * uy
+    const q = Math.hypot(across / rAcross, along / rAlong)
+    if (q > t) t = q
   }
-  const rCovering = maxDist * COVERAGE_MARGIN
 
-  // The sanity cap is applied LAST and therefore OVERRIDES containment: a
-  // garbage landmark frame must not be able to blur the whole picture. See
-  // the JSDoc above — containment holds only while the radius is uncapped.
-  const r = Math.min(Math.max(rHeuristic, rCovering), maxR)
+  // NOTE THE MARGIN'S PLACEMENT — inside the max(), not outside it. This is
+  // the faithful analogue of the circle version's
+  //   r = max(rHeuristic, maxDist * COVERAGE_MARGIN)
+  // where the heuristic floor wins OUTRIGHT when it already over-covers.
+  // Writing `Math.max(1, t) * COVERAGE_MARGIN` would instead scale every
+  // region by 1.60 even when containment is inert, inflating the occluder on
+  // every normal frame — and no containment assertion would catch it.
+  const grow = Math.max(1, t * COVERAGE_MARGIN)
+  rAcross *= grow
+  rAlong  *= grow
 
-  // Reject NaN or infinite values.
-  if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(r)) return null
+  // The sanity cap is applied LAST to BOTH axes and therefore OVERRIDES
+  // containment: a garbage landmark frame must not be able to mask the whole
+  // picture. Containment holds only while the shape is uncapped.
+  rAcross = Math.min(rAcross, maxR)
+  rAlong  = Math.min(rAlong,  maxR)
+
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null
+  if (!Number.isFinite(rAcross) || !Number.isFinite(rAlong)) return null
+  if (!Number.isFinite(ux) || !Number.isFinite(uy)) return null
+
+  // Axis-aligned half-extents of the ORIENTED ellipse — the correct bounding
+  // box for the off-frame test. Using rAcross/rAlong directly would be wrong
+  // for any head axis that is not screen-aligned, i.e. every prone patient.
+  const hx = Math.hypot(rAcross * uy, rAlong * ux)
+  const hy = Math.hypot(rAcross * ux, rAlong * uy)
 
   // No head in the picture → nothing to redact.
-  if (cx + r < 0 || cx - r > videoW || cy + r < 0 || cy - r > videoH) return null
+  if (cx + hx < 0 || cx - hx > videoW || cy + hy < 0 || cy - hy > videoH) return null
 
-  return { cx, cy, r }
+  return { cx, cy, rAcross, rAlong, ux, uy }
 }
+
+/**
+ * Expand a head region to cover motion blur across a frame interval.
+ * Stub — implemented in Task 2.
+ * @param {{cx:number, cy:number, rAcross:number, rAlong:number, ux:number, uy:number}} region
+ */
+export function expandForMotion(region) { return region }
+
+/**
+ * Derive the occluder fill geometry for a head region already mapped into
+ * DISPLAY CSS PIXEL space.
+ * Stub — implemented in Task 3.
+ */
+export function occluderGeometry() { return null }
 
 /**
  * Derive the blur strength and the padded source square for a head circle
