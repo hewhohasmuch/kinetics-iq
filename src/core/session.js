@@ -42,9 +42,9 @@ export class SessionRecorder {
   // one in anyway and it was written to the patient record. A position nobody
   // chose is not data — the views already omit the badge when it is null.
   //
-  // faceRedaction is what the DEVICE ACTUALLY DID ('mask1' — an opaque occluder
-  // applied during capture), stamped as a pipeline record rather than a
-  // per-frame content assertion.
+  // faceRedaction records which redaction pipeline was active during capture.
+  // It is a session-level pipeline flag, not a per-frame assertion that a head
+  // was masked in every frame.
   setContext(joint, side, position, faceRedaction = null) {
     this._joint         = joint
     this._side          = side

@@ -153,12 +153,14 @@ export class SessionDetailView {
    * because the answer differs between sessions, and nothing in the image
    * itself makes that obvious at a glance.
    *
-   * TWO BRANCHES, NOT FOUR. The earlier 'blur1' and 'solid1' branches are gone
-   * along with the blur itself. Any surviving 'blur1' session therefore falls
-   * into the conservative branch below, which is the right way for this to be
-   * wrong: that blur was measured on-device as displaced and barely effective,
-   * so claiming it worked would put a false statement in a patient record —
-   * exactly what this feature exists to prevent.
+   * TWO BRANCHES, NOT THREE. The earlier 'blur1' and 'solid1' branches are gone
+   * along with the blur itself. The conservative branch deliberately covers both:
+   * sessions that genuinely predate head masking, and any surviving 'blur1'
+   * session (where masking had been added but performed poorly on-device). The
+   * flag cannot distinguish them, and the consequence is the same either way —
+   * the frames may show the patient's face. Collapsing these into one branch
+   * avoids a false timeline claim that would wrong either pre-feature sessions or
+   * blur1 sessions, whichever case applied.
    *
    * `faceRedaction` is a session-level pipeline flag, not a per-frame content
    * assertion — it records that the redaction pipeline was active during
@@ -180,7 +182,7 @@ export class SessionDetailView {
     const masked = s.faceRedaction === 'mask1'
     note.textContent = masked
       ? 'Head masking active at capture'
-      : 'Head not masked — captured before head masking was added'
+      : 'Head not masked at capture — these frames may show the patient\'s face'
     note.classList.toggle('unredacted', !masked)
   }
 
