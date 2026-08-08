@@ -301,15 +301,12 @@ async function main() {
       else fail(`${which} snapshot blob missing from IndexedDB`)
     }
 
-    // Redaction smoke test. A blurred head leaves one distinctly smooth patch in
-    // an otherwise detailed photo, so grid the snapshot and compare the smoothest
-    // cell against the median cell. This catches the whole class of silent
-    // failures in one check — unsupported ctx.filter, an alpha leak, redaction
-    // drawn in the wrong order, a region computed somewhere daft.
-    //
-    // It is a SMOKE TEST, not proof: a large flat background would also read as
-    // smooth. The geometry itself is pinned by src/core/headRegion.test.js, and
-    // the screenshot below is still checked by eye.
+    // Grid the peak snapshot for the redaction checks below. This catches the
+    // whole class of silent failures in one measurement — unsupported
+    // ctx.filter, an alpha leak, redaction drawn in the wrong order, a region
+    // computed somewhere daft. The geometry itself is pinned by
+    // src/core/headRegion.test.js, and the screenshot below is still checked
+    // by eye.
     const smooth = await gridFor(page, s.id, 'peak')
 
     // DIAG: dump the grid and export the analysed snapshot, so the head cells
@@ -328,104 +325,81 @@ async function main() {
       }
     }
 
-    if (!smooth) {
-      fail('could not read the peak snapshot back for redaction check')
-    } else if (smooth.median > 0 && smooth.min < 0.25 * smooth.median) {
-      pass(`snapshot contains a smooth region (min ${smooth.min.toFixed(1)} vs median ${smooth.median.toFixed(1)})`)
-    } else {
-      fail(`no blurred region found — min cell ${smooth.min.toFixed(1)}, median ${smooth.median.toFixed(1)}`)
-    }
-
-    // LOCATION CHECK — head region vs control.
+    // REDACTION CHECK — uniformity, not relative smoothness.
     //
-    // The smoke test above only proves *a* smooth patch exists somewhere; it
-    // would pass with the blur landing on the wrong part of the frame. This
-    // check is the head-vs-control comparison the design spec asked for:
-    // the cells the head occupies must be far smoother than a typical cell.
+    // This replaces a head-vs-body comparison that the blur forced on us. The
+    // obvious formulation ("head is smoother than the frame median") was
+    // unsatisfiable: roughly half this fixture is flat sky and ocean, dragging
+    // the median to ~0.8, while a genuinely blurred face measured 1.3-3.8. The
+    // only way to pass a median-relative ceiling was for the blur to land ON
+    // the sky — precisely the bug the check existed to catch.
     //
-    // The earlier global-argmin form of this check was WRONG and was removed.
-    // It asserted the single smoothest cell in the whole image was the head —
-    // but this fixture is a beach photo with a large expanse of open sky, and
-    // sky is flatter than a blurred head. Measured: sky cells run 0.1-0.3
-    // while the blurred head runs ~1-2. The argmin therefore lands in the sky
-    // (gx=1, gy=2) every run. That was a legitimate failure of the check, not
-    // of the redaction.
+    // An opaque occluder makes the assertion absolute instead of comparative.
+    // A solid fill has NO internal texture, so its cells read at JPEG-noise
+    // level. That is a property of the redaction itself, not of how it compares
+    // to its surroundings, and nothing about the sky can satisfy it while the
+    // body cells stay textured.
     //
-    // HEAD CELLS ARE FIXTURE-SPECIFIC. The cells below (gx 6-7 / gy 4-5) were
-    // re-derived on 2026-08-07 from a run confirmed BROKEN: the frame-buffer
-    // fix in 74dd950 hadn't landed yet at capture time, so the overlay and the
-    // composited video disagreed about the fixture's mid-run mirror flip and
-    // the blur landed off the head. Those cells passed only because they
-    // happened to sit over open sky in that mislocated frame, not because the
-    // head was actually there — see .superpowers/sdd/2026-08-05-face-blur-redaction/
-    // head-cells-report.md for the full account.
-    //
-    // Re-verified 2026-08-07 against a run confirmed CORRECT (head visibly
-    // blurred in peak-analysed.png and session-detail.png, subject and blur in
-    // agreement). At the stored resolution of 430x644 with a 12x12 grid (cell
-    // 35x53px), the true head/blur-disc bounding box is x≈170-240px,
-    // y≈235-300px → columns 4-6, rows 4-5. Column 6 was excluded from the
-    // measured cells below: at this resolution it is dominated by the sharp
-    // (deliberately unblurred) hairline and neck/collar just outside the face
-    // circle, not by the blur — including it would test hair sharpness, not
-    // redaction. Columns 4-5 / rows 4-5 is the tightest 2x2 block that is
-    // majority blurred-face content in every cell.
-    //
-    // RE-MEASURE THESE if scripts/e2e/fixture.mjs or the source photo changes:
-    // rerun with E2E_DIAG=1, open .fixtures/peak-analysed.png, and repeat the
-    // procedure above (grid-overlay a candidate block, confirm by eye it's on
-    // the blurred face and not sky/hair/clothing, then read its mean off the
-    // dumped grid).
+    // HEAD CELLS ARE FIXTURE-SPECIFIC. At the stored resolution of 430x644 with
+    // a 12x12 grid (cell 35x53px) the head sits at columns 4-6, rows 4-5;
+    // column 6 is excluded because it is dominated by the sharp hairline and
+    // collar just outside the mask. RE-MEASURE if scripts/e2e/fixture.mjs or
+    // the source photo changes: rerun with E2E_DIAG=1, open
+    // .fixtures/peak-analysed.png, grid-overlay a candidate block and confirm
+    // by eye that it sits on the mask.
     const HEAD_CELL_GX = [4, 5]
     const HEAD_CELL_GY = [4, 5]
-
-    // COMPARISON BASIS — compare the head against the SUBJECT, not the whole
-    // frame. The obvious formulation ("head mean < 0.25 x whole-frame median")
-    // was tried and is unsatisfiable here, for a reason worth recording: it
-    // assumes the frame's typical content is busy, so a blurred region reads as
-    // an outlier low. Roughly half this fixture is flat sky and ocean, which
-    // drags the whole-grid median to ~0.8 — already near sky-flat. A genuinely
-    // blurred face is a smoothed but still varying disc (measured 1.3-3.8), so
-    // nothing short of the blur landing ON the sky — the original bug this
-    // check exists to catch — could ever pass a median-relative ceiling.
-    //
-    // Measured on this fixture: genuine blur 1.3-3.8, genuine sharp subject
-    // detail 5.4-14.4. Those bands are cleanly separated, so the check asserts
-    // the head is markedly flatter than the sharp body cells beside it. That
-    // fails loudly if the blur is mis-placed (head cells become sharp) and
-    // cannot be satisfied by the blur wandering onto the sky, since the
-    // reference is the subject rather than the frame.
     const BODY_CELL_GX = [4, 5, 6, 7]
-    const BODY_CELL_GY = [8, 9]          // torso/legs — always sharp, never redacted
-    const HEAD_VS_BODY_MAX = 0.5         // head must be at most this fraction of body detail
+    const BODY_CELL_GY = [8, 9]        // torso/legs — always sharp, never masked
 
-    if (smooth) {
-      const meanOf = (gxs, gys) => {
-        const cells = []
-        for (const gy of gys) for (const gx of gxs) cells.push(smooth.grid[gy][gx])
-        return cells.reduce((a, b) => a + b, 0) / cells.length
+    // An opaque fill measured through JPEG at quality 0.78. Cells that overlap
+    // the feather band or the outline read higher, so the assertion is on the
+    // FLATTEST head cell, which is pure core.
+    const UNIFORM_MAX  = 1.0
+    // Proves the frame is a real photo and not a blank canvas — without this,
+    // an all-black snapshot would pass the uniformity test triumphantly.
+    const TEXTURED_MIN = 3.0
+
+    if (!smooth) {
+      fail('could not read the peak snapshot back for redaction check')
+    } else {
+      const cellsOf = (gxs, gys) => {
+        const out = []
+        for (const gy of gys) for (const gx of gxs) out.push(smooth.grid[gy][gx])
+        return out
       }
-      const headMean = meanOf(HEAD_CELL_GX, HEAD_CELL_GY)
-      const bodyMean = meanOf(BODY_CELL_GX, BODY_CELL_GY)
-      const ceiling  = HEAD_VS_BODY_MAX * bodyMean
+      const headCells = cellsOf(HEAD_CELL_GX, HEAD_CELL_GY)
+      const bodyCells = cellsOf(BODY_CELL_GX, BODY_CELL_GY)
+      const headMin   = Math.min(...headCells)
+      const bodyMean  = bodyCells.reduce((a, b) => a + b, 0) / bodyCells.length
 
-      if (bodyMean > 0 && headMean < ceiling) {
-        pass(`head region is blurred in the stored snapshot ` +
-             `(head ${headMean.toFixed(1)} vs sharp body ${bodyMean.toFixed(1)}, ` +
-             `ceiling ${ceiling.toFixed(1)})`)
+      const dumpGrid = () => info('grid (row=gy, col=gx):\n' +
+        smooth.grid.map((row) => row.map((v) => v.toFixed(1).padStart(5)).join(' ')).join('\n'))
+
+      if (headMin < UNIFORM_MAX) {
+        pass(`head region is a uniform opaque mask (flattest head cell ${headMin.toFixed(2)}, ` +
+             `required < ${UNIFORM_MAX})`)
       } else {
-        info(`grid (row=gy, col=gx):\n` + smooth.grid.map(row => row.map(v => v.toFixed(1).padStart(5)).join(' ')).join('\n'))
-        fail(`head region is NOT blurred in the stored snapshot — head cells ` +
-             `(gx ${HEAD_CELL_GX}, gy ${HEAD_CELL_GY}) mean ${headMean.toFixed(1)}, ` +
-             `sharp body ${bodyMean.toFixed(1)}, required < ${ceiling.toFixed(1)}. ` +
+        dumpGrid()
+        fail(`head region is NOT masked — flattest head cell (gx ${HEAD_CELL_GX}, ` +
+             `gy ${HEAD_CELL_GY}) is ${headMin.toFixed(2)}, required < ${UNIFORM_MAX}. ` +
              `Rerun with E2E_DIAG=1 to dump the grid and export the snapshot.`)
+      }
+
+      if (bodyMean > TEXTURED_MIN) {
+        pass(`snapshot is a real photograph (sharp body detail ${bodyMean.toFixed(1)})`)
+      } else {
+        dumpGrid()
+        fail(`snapshot has no sharp detail anywhere — body cells mean ${bodyMean.toFixed(1)}, ` +
+             `required > ${TEXTURED_MIN}. The uniformity check above is meaningless ` +
+             `if the whole frame is flat.`)
       }
     }
 
     // Redaction mode reached the record.
-    if (s.faceRedaction === 'blur1' || s.faceRedaction === 'solid1')
+    if (s.faceRedaction === 'mask1')
       pass(`session stamped faceRedaction=${s.faceRedaction}`)
-    else fail(`session faceRedaction is ${JSON.stringify(s.faceRedaction)}`)
+    else fail(`session faceRedaction is ${JSON.stringify(s.faceRedaction)}, expected "mask1"`)
 
     console.log('\n5. History and detail')
     await page.click('#btn-history')
@@ -437,7 +411,7 @@ async function main() {
     await page.screenshot({ path: shot })
     pass(`SessionDetail rendered — screenshot: ${shot}`)
     info('check by eye: the angle burned into each frame should match its caption')
-    info('check by eye: the head is blurred in both frames, fully covered, no sharp rim')
+    info('check by eye: the head is fully masked in both frames, opaque core, no sharp rim')
 
     console.log('\n6. Console health')
     const real = consoleErrors.filter((e) => !/ERR_CERT|self.signed|favicon/i.test(e))
