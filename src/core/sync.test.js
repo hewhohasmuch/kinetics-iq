@@ -360,8 +360,8 @@ describe('shape mapping', () => {
   })
 
   it('pushes the face-redaction stamp', () => {
-    const row = sessionToRow({ ...makeSession(), faceRedaction: 'blur1' })
-    expect(row.face_redaction).toBe('blur1')
+    const row = sessionToRow({ ...makeSession(), faceRedaction: 'mask1' })
+    expect(row.face_redaction).toBe('mask1')
   })
 
   it('pushes null when a session predates redaction', () => {
@@ -370,8 +370,8 @@ describe('shape mapping', () => {
   })
 
   it('round-trips the stamp so a pull cannot erase it', () => {
-    const original = { ...makeSession(), faceRedaction: 'solid1' }
+    const original = { ...makeSession(), faceRedaction: 'mask1' }
     const back     = rowToSession(sessionToRow(original))
-    expect(back.faceRedaction).toBe('solid1')
+    expect(back.faceRedaction).toBe('mask1')
   })
 })

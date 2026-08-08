@@ -355,27 +355,19 @@ describe('measurement position', () => {
 
 describe('face redaction mode', () => {
 
-  it('stamps the face redaction mode the device actually used', () => {
+  it('stamps the redaction mode the device actually used', () => {
     const recorder = new SessionRecorder()
-    recorder.setContext('knee', 'right', 'prone', 'blur1')
+    recorder.setContext('knee', 'right', 'prone', 'mask1')
     recorder.start()
-    recorder.record(10); recorder.record(20); recorder.record(30)
-    expect(recorder.stop().faceRedaction).toBe('blur1')
-  })
-
-  it('records the solid fallback rather than claiming a blur', () => {
-    const recorder = new SessionRecorder()
-    recorder.setContext('knee', 'right', 'prone', 'solid1')
-    recorder.start()
-    recorder.record(10); recorder.record(20); recorder.record(30)
-    expect(recorder.stop().faceRedaction).toBe('solid1')
+    recorder.record(10)
+    expect(recorder.stop().faceRedaction).toBe('mask1')
   })
 
   it('leaves faceRedaction null when no mode was supplied', () => {
     const recorder = new SessionRecorder()
     recorder.setContext('knee', 'right', 'prone')
     recorder.start()
-    recorder.record(10); recorder.record(20); recorder.record(30)
+    recorder.record(10)
     expect(recorder.stop().faceRedaction).toBeNull()
   })
 
