@@ -1,5 +1,15 @@
 -- Migration: face-redaction stamp on sessions
 --
+-- ⚠️ HISTORICAL. The feature this column served was REMOVED in #17 (2026-08-08)
+-- after two on-device failures: the blur shipped displaced and legible, and the
+-- opaque occluder that replaced it could not contain hair without covering the
+-- shoulder. Nothing in the app now reads or writes face_redaction.
+--
+-- Still apply this migration when bringing an old project up to date — the
+-- column is deliberately retained rather than dropped, because it is the only
+-- record of which stored snapshots had any redaction applied. Everything below
+-- describes the feature as it stood when it shipped.
+--
 -- Apply to an EXISTING KineticsIQ project (tables already created from
 -- schema.sql). Idempotent — safe to run more than once. Paste into the
 -- Supabase SQL editor and Run. New projects can just apply schema.sql, which

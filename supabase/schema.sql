@@ -38,6 +38,12 @@ create table public.sessions (
   angle_mode      text,                                -- '3d' | absent = pre-3D/2D-era
   angle_filter    text,                                -- 'euro1' | absent = old moving average, peaks clipped
   angle_convention text,                               -- 'perjoint1' | absent = shoulder inverted, ankle offset 90
+  -- HISTORICAL — nothing reads or writes this. Head redaction shipped in #15
+  -- ('blur1', or 'solid1' where Canvas 2D filters were unsupported) and was
+  -- removed in #17 after two on-device failures. Retained, not dropped: it is
+  -- the only record of which stored snapshots had any redaction applied, which
+  -- is the question an audit of the image store would ask. Sessions outside
+  -- that window are NULL and their snapshots show the patient's face.
   face_redaction  text,
   notes           text default '',
   app_version     text,
