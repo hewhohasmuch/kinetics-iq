@@ -2,7 +2,7 @@
  * headRegion.js
  *
  * Locates the patient's head in a MediaPipe pose result, as an oriented
- * ellipse, so it can be blurred out of the session snapshots.
+ * ellipse, so it can be masked out of the session snapshots.
  *
  * PURE GEOMETRY — no DOM, no canvas. Fully testable in Node.
  *
@@ -59,7 +59,22 @@
 export const HEAD_RADIUS_FACTOR  = 0.85  // radius as a multiple of the scale estimate
 export const TORSO_SCALE_COEFF   = 0.70  // makes the torso estimate ≈ the face estimate frontally
 export const CRANIUM_NUDGE       = 0.35  // centre offset along the shoulders→head axis, as a fraction of r
-export const MAX_RADIUS_FRACTION = 0.50  // sanity cap against a garbage landmark frame
+export const MAX_RADIUS_FRACTION = 0.50  // sanity cap — see headRegion()'s JSDoc for what actually triggers it and how far containment holds past it
+
+// Raised from 0.92/1.14 to 1.60/1.75 (2026-08-08) to stop windblown hair
+// breaking outside the ellipse's rim in the e2e fixture. MediaPipe's face
+// landmarks bound the face, not the hair, so containment (COVERAGE_MARGIN,
+// below) can never reach it by construction — only these two seeds can.
+// Tuned by eye against the e2e fixture, not derived: E2E_DIAG=1 npm run
+// verify:e2e, then open scripts/e2e/.fixtures/peak-analysed.png and
+// min-analysed.png and check no hair, ear or scalp breaks outside the
+// occluder. Re-tune the same way if the fixture or source photo changes.
+//
+// At these values the seed dominates the final size on every fixture in
+// headRegion.test.js: the containment term computes to inert (grow ==
+// 1.0000, worst landmark q between 0.39 and 0.60) on all but one
+// deliberately tight close-framed case, so these two numbers — not
+// COVERAGE_MARGIN — decide what most sessions actually mask.
 export const ELLIPSE_ACROSS = 1.60  // seed semi-axis across the head axis, x rHeuristic
 export const ELLIPSE_ALONG  = 1.75  // seed semi-axis along it — a head is taller than wide
 export const FEATHER_EXTENT = 1.35  // alpha reaches 0 here, as a multiple of the core
@@ -82,9 +97,17 @@ export const OUTLINE_AT     = 1.04  // outline sits just outside the core
  * eleven face landmarks bound the FACE (eye line to mouth, ear to ear); the
  * skull, hairline and the back of the head extend well past them and have no
  * landmarks of their own, so containment alone can never reach them. Tuned
- * against the e2e fixture by inspecting the exported snapshot, not derived:
- * at 1.10 the face was covered but hair, ear and the back of the head were
- * left sharp in the stored image.
+ * against the e2e fixture by inspecting the exported snapshot back when this
+ * region was a circle: at 1.10 the face was covered but hair, ear and the
+ * back of the head were left sharp in the stored image; raising it to 1.60
+ * fixed that generation of the problem.
+ *
+ * COVERAGE_MARGIN has not moved since. It is NOT what fixed the later
+ * windblown-hair regression on this branch (hair breaking outside the
+ * ellipse's rim) — that was raising ELLIPSE_ACROSS/ELLIPSE_ALONG (see their
+ * declarations above), well after this constant was last touched. Scaling
+ * this margin up again would inflate every frame equally, not just the ones
+ * with protruding hair.
  */
 export const COVERAGE_MARGIN     = 1.60
 export const MOTION_GAIN         = 1.0  // occluder growth per pixel of inter-frame head travel
@@ -130,9 +153,9 @@ export function headInputsFinite(landmarksNorm) {
  * screen", not "are the inputs trustworthy".
  *
  * Exists because headRegion()'s radius is CAPPED (MAX_RADIUS_FRACTION), and
- * the off-frame rejection is applied to the CAPPED circle: a head that is
+ * the off-frame rejection is applied to the CAPPED ellipse: a head that is
  * large and mostly off-frame (e.g. camera held close) can yield a clamped
- * circle that lies entirely outside the video rect while a face landmark is
+ * ellipse that lies entirely outside the video rect while a face landmark is
  * still a few pixels inside it. headRegion() returning null there does NOT
  * mean "nothing to redact" — this function is what actually proves that.
  *
@@ -173,14 +196,28 @@ export function anyFaceLandmarkInFrame(landmarksNorm, videoW, videoH) {
  * CONTAINMENT, AND ITS ONE EXCEPTION. The returned ellipse contains every face
  * landmark with COVERAGE_MARGIN of slack — by construction, not by hoping the
  * heuristics were generous enough. The one exception is MAX_RADIUS_FRACTION,
- * which is applied LAST and therefore WINS: on a garbage landmark frame the
- * sanity cap takes precedence over containment, because an ellipse covering
- * half the frame is its own failure. **Containment is guaranteed only when
- * neither semi-axis is capped** — i.e. when both
- * `rAcross, rAlong < MAX_RADIUS_FRACTION × min(videoW, videoH)`. A capped
- * frame is by definition one whose landmarks are not to be trusted anyway;
- * callers that need a hard guarantee should treat a capped result as
- * unreliable rather than as proof the face is covered.
+ * which is applied LAST and therefore WINS: it overrides containment because
+ * an ellipse covering half the frame is its own failure, whatever the
+ * landmarks say. **Containment is guaranteed only when neither semi-axis is
+ * capped** — i.e. when both `rAcross, rAlong < MAX_RADIUS_FRACTION ×
+ * min(videoW, videoH)`.
+ *
+ * WHAT ACTUALLY TRIGGERS THE CAP, MEASURED — not "garbage landmarks". At the
+ * current seed constants (ELLIPSE_ACROSS/ELLIPSE_ALONG raised to 1.60/1.75
+ * for hair containment) the cap starts engaging at roughly a 170px face
+ * width in a 720px-tall frame (it was ~200px before that raise) — an
+ * ordinary elbow or shoulder framing, not a garbage one. Containment itself
+ * still holds comfortably there (worst landmark q measured 0.66–0.83, well
+ * under the 1.0 boundary); face landmarks don't actually fall outside the
+ * (uncapped) ellipse until roughly a 370px face width — a head filling more
+ * than half the frame, unreachable in any realistic ROM framing.
+ * `MAX_RADIUS_FRACTION = 0.50` was calibrated when the seeds were ~1.0×
+ * rHeuristic and has not been revisited since they rose to 1.6–1.75×, so it
+ * now caps well inside the region containment can actually cover. Callers
+ * that need a hard guarantee should still treat a capped result as unproven
+ * rather than as proof of coverage — that part is still correct — just not
+ * because a capped frame implies untrustworthy landmarks; at these
+ * constants it doesn't.
  */
 export function headRegion(landmarksNorm, videoW, videoH) {
   if (!landmarksNorm || landmarksNorm.length <= RIGHT_SHOULDER) return null
@@ -276,8 +313,10 @@ export function headRegion(landmarksNorm, videoW, videoH) {
   rAlong  *= grow
 
   // The sanity cap is applied LAST to BOTH axes and therefore OVERRIDES
-  // containment: a garbage landmark frame must not be able to mask the whole
-  // picture. Containment holds only while the shape is uncapped.
+  // containment: an ellipse must not be able to mask half the frame,
+  // whatever the landmarks say. See headRegion()'s JSDoc for how far past
+  // ordinary framings containment actually holds before this engages.
+  // Containment holds only while the shape is uncapped.
   rAcross = Math.min(rAcross, maxR)
   rAlong  = Math.min(rAlong,  maxR)
 
@@ -305,9 +344,9 @@ export function headRegion(landmarksNorm, videoW, videoH) {
  * to end) while the <video> element underneath keeps playing at 30fps, so the
  * overlay is positioned from landmarks that are already stale by the time it is
  * composited over the live preview. At walking pace that is 80-90px — about one
- * head radius, which is exactly the offset seen in tmp/blur1.jpg. Growing the
- * shape by the last displacement covers the swept path instead of a stale
- * point.
+ * head radius, which matches an on-device screenshot that showed the
+ * redaction trailing the head by about its own radius. Growing the shape by
+ * the last displacement covers the swept path instead of a stale point.
  *
  * The CENTRE is deliberately not moved. Extrapolating it forward would guess at
  * a velocity from two samples and can overshoot off the head entirely; growing

@@ -154,7 +154,7 @@ export class Overlay {
     this.clear()
 
     // BEFORE the no-markers early return below. Losing the joint landmarks
-    // mid-session — patient shifts, limb leaves frame — must not un-blur the
+    // mid-session — patient shifts, limb leaves frame — must not un-mask the
     // preview at exactly the moment the clinician looks at the screen to fix it.
     this._drawRedaction(opts.head ?? null, opts.video ?? null)
 

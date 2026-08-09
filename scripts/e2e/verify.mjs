@@ -341,12 +341,18 @@ async function main() {
     // body cells stay textured.
     //
     // HEAD CELLS ARE FIXTURE-SPECIFIC. At the stored resolution of 430x644 with
-    // a 12x12 grid (cell 35x53px) the head sits at columns 4-6, rows 4-5;
-    // column 6 is excluded because it is dominated by the sharp hairline and
-    // collar just outside the mask. RE-MEASURE if scripts/e2e/fixture.mjs or
-    // the source photo changes: rerun with E2E_DIAG=1, open
-    // .fixtures/peak-analysed.png, grid-overlay a candidate block and confirm
-    // by eye that it sits on the mask.
+    // a 12x12 grid (cell 35x53px) the head sits at columns 4-6, rows 4-5.
+    // Column 6 is left out of the checked set as a margin of safety near the
+    // mask's right edge, not because it's confirmed to fail — at the current
+    // (post-hair-raise) ELLIPSE_ACROSS/ELLIPSE_ALONG the occluder is
+    // substantially larger than when this exclusion was written, and column 6
+    // likely sits on the mask too now, but that was never re-confirmed when
+    // those constants moved. Keeping [4, 5] as the proven-safe core avoids
+    // resting the check on an assumption. RE-MEASURE if scripts/e2e/fixture.mjs,
+    // the source photo, or the ellipse seed constants change: rerun with
+    // E2E_DIAG=1, open .fixtures/peak-analysed.png, grid-overlay a candidate
+    // block and confirm by eye that it sits on the mask before widening the
+    // checked set.
     const HEAD_CELL_GX = [4, 5]
     const HEAD_CELL_GY = [4, 5]
     const BODY_CELL_GX = [4, 5, 6, 7]

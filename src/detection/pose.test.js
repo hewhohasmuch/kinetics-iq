@@ -188,8 +188,7 @@ describe('PoseDetector', () => {
     //
     // RE-MEASURED after the hair-coverage fix raised headRegion.js's
     // ELLIPSE_ACROSS/ELLIPSE_ALONG (0.92/1.14 -> 1.60/1.75) to stop windblown
-    // hair breaking the occluder's rim in the e2e fixture — see
-    // .superpowers/sdd/2026-08-08-head-occluder/task-7-report.md. Was
+    // hair breaking the occluder's rim in the e2e fixture. Was
     // rAcross ≈ 137.31px / rAlong ≈ 170.15px; confirmed visually via the e2e
     // harness's exported peak/min-analysed.png that the larger ellipse is
     // still a reasonable head-covering shape, not a runaway size.

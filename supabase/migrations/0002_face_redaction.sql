@@ -7,8 +7,11 @@
 --
 -- What it does:
 --   Adds face_redaction to sessions: which head-redaction generation was
---   applied to that session's snapshots ('blur1', 'solid1'), or NULL for
---   sessions captured with the face visible.
+--   applied to that session's snapshots. Current value is 'mask1' (opaque
+--   occluder). 'blur1' and 'solid1' are historical — the earlier Canvas 2D
+--   blur, kept only on sessions captured before the occluder replaced it.
+--   NULL means captured with the face visible (pre-redaction, or the flag
+--   not yet applicable).
 --
 -- NOTE: this stamp is not a de-identification claim. Snapshots stay linked to
 -- a named patient and a date of service, so they remain PHI regardless.

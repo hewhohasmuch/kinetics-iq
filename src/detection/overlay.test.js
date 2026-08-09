@@ -89,8 +89,9 @@ describe('Overlay redaction mode', () => {
 describe('Overlay._drawRedaction', () => {
   it('never samples a patch of the frame into the overlay', () => {
     // THE FAILURE THIS DESIGN EXISTS TO REMOVE. The blur version copied a
-    // padded square of video into the circle, which is what misregistered in
-    // tmp/blur1.jpg. Nothing may be blitted onto the overlay context.
+    // padded square of video into the circle — an on-device screenshot showed
+    // that patch landing visibly offset from the head. Nothing may be
+    // blitted onto the overlay context.
     stubWindow(3)
     stubDocument()
     const { canvas, calls } = createOverlayCanvas()

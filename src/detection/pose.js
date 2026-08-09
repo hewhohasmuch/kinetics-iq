@@ -83,14 +83,15 @@ export class PoseDetector {
   //
   // Returns { markers, allFound, foundIds, head, headResolved }:
   //   - markers/allFound/foundIds: joint landmarks, centers in video pixel space.
-  //   - head: { cx, cy, r } circle (video pixel space) to redact over the
-  //     patient's head, or null — see headRegion() in ../core/headRegion.js.
+  //   - head: { cx, cy, rAcross, rAlong, ux, uy } oriented ellipse (video pixel
+  //     space) to redact over the patient's head, or null — see headRegion()
+  //     in ../core/headRegion.js.
   //   - headResolved: whether `head` above is trustworthy enough to capture a
   //     snapshot from THIS frame. True only when a redaction was actually
   //     drawn (head !== null) or it is provable that no face landmark is on
   //     screen at all (nothing to redact). False whenever a face landmark may
   //     be in frame but no redaction was produced for it — e.g. non-finite
-  //     landmarks, or a real head whose capped circle fell off-rect — since
+  //     landmarks, or a real head whose capped ellipse fell off-rect — since
   //     capturing in that state risks storing an unredacted face. See the
   //     `headResolved` derivation below for the full case breakdown.
   detect(videoElement) {
@@ -152,7 +153,7 @@ export class PoseDetector {
     // reasons:
     //   1. Bad inputs (NaN/missing landmark) — headInputsFinite() catches this.
     //   2. A head that IS large enough to be a real face, but whose radius got
-    //      capped by MAX_RADIUS_FRACTION, landing the clamped circle entirely
+    //      capped by MAX_RADIUS_FRACTION, landing the clamped ellipse entirely
     //      off-frame while a face landmark is still a few pixels inside the
     //      video rect (camera held close). anyFaceLandmarkInFrame() catches
     //      this — headInputsFinite() can't, since it only checks finiteness.

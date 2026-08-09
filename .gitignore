@@ -7,5 +7,6 @@ dist
 # Generated E2E fixtures — downloaded pose image, ~23MB y4m, screenshots
 scripts/e2e/.fixtures
 
-# Brainstorming visual companion mockups
+# Claude Code working directory: brainstorms, implementation plans, task
+# reports and review packages — scratch/process artifacts, not shared code
 .superpowers/
