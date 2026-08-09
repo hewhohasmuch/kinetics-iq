@@ -35,7 +35,9 @@ create table public.sessions (
   duration_s      integer,
   samples         integer,
   angle_timeline  jsonb,                               -- number[], ~3-4 KB per session
-  angle_mode      text,
+  angle_mode      text,                                -- '3d' | absent = pre-3D/2D-era
+  angle_filter    text,                                -- 'euro1' | absent = old moving average, peaks clipped
+  angle_convention text,                               -- 'perjoint1' | absent = shoulder inverted, ankle offset 90
   face_redaction  text,
   notes           text default '',
   app_version     text,

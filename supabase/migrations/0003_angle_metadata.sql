@@ -1,0 +1,37 @@
+-- Migration: angle-provenance stamps on sessions
+--
+-- Apply to an EXISTING KineticsIQ project (tables already created from
+-- schema.sql). Idempotent — safe to run more than once. Paste into the
+-- Supabase SQL editor and Run. New projects can just apply schema.sql, which
+-- already includes everything below.
+--
+-- APPLY THIS BEFORE DEPLOYING the code change that maps these columns.
+-- PostgREST rejects an insert naming an unknown column with a 4xx, and
+-- sync.js treats permanent errors as unretryable and DROPS the op — so
+-- deploying first would silently stop sessions syncing rather than fail loudly.
+--
+-- What it does:
+--   Adds angle_filter and angle_convention to sessions. Both already exist on
+--   the client session object; neither was mapped in sessionToRow/rowToSession,
+--   so a cloud pull silently stripped them and a session that round-tripped
+--   through the cloud came back looking like a pre-fix recording.
+--
+-- Why they matter — these are not decorative provenance:
+--   angle_filter     'euro1' = One Euro smoothing. Sessions WITHOUT it were
+--                    recorded through the old 15-sample moving average, which
+--                    clipped 10-15 degrees off the peak of a dynamic sweep, so
+--                    their rom is not comparable with a 'euro1' session's. The
+--                    difference looks like patient progress but is the filter.
+--   angle_convention 'perjoint1' = per-joint clinical mapping. Sessions WITHOUT
+--                    it have shoulder values on an inverted scale, ankle values
+--                    offset by 90 degrees, and — if recorded after a Set Zero —
+--                    everything below the zero point clamped to 0. Those numbers
+--                    are NOT recoverable.
+--
+-- Losing either stamp therefore downgrades a good session to one that has to be
+-- treated as suspect. Existing rows stay NULL, which is the correct reading for
+-- anything that predates the stamps; it is only wrong for rows whose stamp the
+-- unmapped round-trip already discarded, and that is not recoverable here.
+
+alter table public.sessions add column if not exists angle_filter text;
+alter table public.sessions add column if not exists angle_convention text;

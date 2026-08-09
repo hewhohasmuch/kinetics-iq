@@ -358,4 +358,67 @@ describe('shape mapping', () => {
     })
     expect(back.updated_at).toBe(patient.updated_at)
   })
+
+  // ─── Angle provenance ────────────────────────────────────────────────
+  //
+  // These say how a session's numbers were produced, and a session missing
+  // them has to be treated as suspect: without `angleFilter` the old moving
+  // average clipped its peaks (its `rom` is not comparable with a 'euro1'
+  // session's — the difference looks like patient progress but is the filter),
+  // and without `angleConvention` the shoulder values are on an inverted scale
+  // and the ankle values offset by 90°.
+  //
+  // Only `angle_mode` was mapped originally, so a cloud pull silently stripped
+  // the other two and a round-tripped session came back looking like a
+  // pre-fix recording. Each direction is pinned separately below because a
+  // half-fix — pushing but not reading, or the reverse — still loses the stamp.
+
+  it('pushes all three angle-provenance stamps, not just angle_mode', () => {
+    const row = sessionToRow({
+      ...makeSession(), angleMode: '3d', angleFilter: 'euro1', angleConvention: 'perjoint1',
+    })
+    expect(row.angle_mode).toBe('3d')
+    expect(row.angle_filter).toBe('euro1')
+    expect(row.angle_convention).toBe('perjoint1')
+  })
+
+  it('pushes null for stamps a legacy session never had', () => {
+    const { angleMode, ...legacy } = makeSession()
+    const row = sessionToRow(legacy)
+    expect(row.angle_mode).toBeNull()
+    expect(row.angle_filter).toBeNull()
+    expect(row.angle_convention).toBeNull()
+  })
+
+  it('reads all three stamps back off a row', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      angle_mode: '3d', angle_filter: 'euro1', angle_convention: 'perjoint1',
+      updated_at: new Date(0).toISOString(),
+    })
+    expect(back.angleMode).toBe('3d')
+    expect(back.angleFilter).toBe('euro1')
+    expect(back.angleConvention).toBe('perjoint1')
+  })
+
+  it('leaves absent stamps undefined rather than null, so pre-stamp sessions stay detectable', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      updated_at: new Date(0).toISOString(),
+    })
+    expect(back.angleFilter).toBeUndefined()
+    expect(back.angleConvention).toBeUndefined()
+  })
+
+  it('round-trips angle provenance so a pull cannot downgrade a good session', () => {
+    // THE REGRESSION THIS FILE EXISTS TO PIN. Before the fix this returned
+    // undefined for both, turning a session whose numbers are trustworthy into
+    // one that reads as unrecoverable.
+    const original = {
+      ...makeSession(), angleMode: '3d', angleFilter: 'euro1', angleConvention: 'perjoint1',
+    }
+    const back = rowToSession(sessionToRow(original))
+    expect(back.angleFilter).toBe('euro1')
+    expect(back.angleConvention).toBe('perjoint1')
+  })
 })

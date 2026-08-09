@@ -233,7 +233,16 @@ export function sessionToRow(s) {
     duration_s:     s.duration_s,
     samples:        s.samples,
     angle_timeline: s.angleTimeline ?? null,
-    angle_mode:     s.angleMode ?? null,
+    // All three angle-provenance stamps must travel. They say how the numbers
+    // in this row were produced, and a session missing them has to be treated
+    // as suspect: no `angle_filter` means the old moving average clipped its
+    // peaks, and no `angle_convention` means shoulder values are on an inverted
+    // scale and ankle values offset by 90°. Mapping `angle_mode` alone — which
+    // is what this did originally — let a cloud pull silently downgrade a good
+    // session into one that looks unrecoverable.
+    angle_mode:       s.angleMode ?? null,
+    angle_filter:     s.angleFilter ?? null,
+    angle_convention: s.angleConvention ?? null,
     notes:          s.notes ?? '',
     app_version:    s.app_version ?? null,
     peak_frame_path: s.peakFramePath ?? null,
@@ -259,7 +268,11 @@ export function rowToSession(row) {
     duration_s:    row.duration_s,
     samples:       row.samples,
     angleTimeline: row.angle_timeline ?? [],
-    angleMode:     row.angle_mode ?? undefined,
+    // `undefined`, not null — absence is what marks a pre-stamp session, and
+    // storage/UI already branch on the field being missing.
+    angleMode:       row.angle_mode ?? undefined,
+    angleFilter:     row.angle_filter ?? undefined,
+    angleConvention: row.angle_convention ?? undefined,
     notes:         row.notes ?? '',
     app_version:   row.app_version ?? undefined,
     peakFramePath: row.peak_frame_path ?? null,
