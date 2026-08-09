@@ -1,0 +1,41 @@
+-- Migration: calibration provenance on sessions
+--
+-- Apply to an EXISTING KineticsIQ project (tables already created from
+-- schema.sql). Idempotent — safe to run more than once. Paste into the
+-- Supabase SQL editor and Run. New projects can just apply schema.sql, which
+-- already includes everything below.
+--
+-- APPLY THIS BEFORE DEPLOYING the code change that maps these columns.
+-- PostgREST rejects an insert naming an unknown column with a 4xx, and
+-- sync.js treats permanent errors as unretryable and DROPS the op — so
+-- deploying first would silently stop sessions syncing rather than fail loudly.
+-- Same hazard as 0003; the ordering is not optional.
+--
+-- What it does:
+--   Adds calibrated and calibration_offset to sessions, recording whether the
+--   clinician captured a zero before the recording and what offset was
+--   subtracted from every raw angle in it.
+--
+-- Why it matters:
+--   The offset has only ever lived in device-local settings (rom_settings),
+--   which is global to the device and is CLEARED on every joint, side and
+--   patient switch. Once a session was written there was no way to reconstruct
+--   whether its numbers were raw or re-based on a captured neutral — and those
+--   are different measurements of the same joint, not different presentations
+--   of one. The shoulder shows the size of it: the same range reads roughly
+--   24.6 -> 160.7 degrees raw and -1.4 -> 129.8 degrees after Set Zero.
+--
+--   That distinction is the whole basis of comparing app readings against a
+--   goniometer. Without it a validation set silently mixes two populations.
+--
+-- ABSENCE SEMANTICS — the reason `calibrated` is nullable rather than
+-- `not null default false`:
+--   NULL means the session never recorded its calibration state. FALSE is the
+--   positive claim that it was measured raw. Defaulting existing rows to FALSE
+--   would manufacture that claim for every session predating this migration,
+--   including ones that were carefully zeroed. Existing rows stay NULL, and the
+--   app reads NULL as "Calibration not recorded". This mirrors how the angle
+--   stamps added in 0003 treat absence.
+
+alter table public.sessions add column if not exists calibrated boolean;
+alter table public.sessions add column if not exists calibration_offset real;

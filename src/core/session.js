@@ -30,6 +30,8 @@ export class SessionRecorder {
     this._joint     = 'knee'
     this._side      = 'right'
     this._position  = null
+    this._calOffset = null    // null = no calibration state supplied
+    this._calibrated = null
   }
 
   // Set the joint, side, and position before start() so they appear in the saved session.
@@ -43,6 +45,30 @@ export class SessionRecorder {
     this._joint    = joint
     this._side     = side
     this._position = position ?? null
+  }
+
+  /**
+   * Record the calibration state these angles were measured under. Call before
+   * start(), alongside setContext().
+   *
+   * WHY THIS IS ON THE SESSION AND NOT JUST IN SETTINGS:
+   * The offset lives in rom_settings, which is global and is cleared on every
+   * joint, side or patient switch. Once a session was saved there was no way to
+   * tell whether its numbers were raw or re-based on a captured neutral — and
+   * those are different measurements. The shoulder is the clearest case: the
+   * same joint reads roughly 24.6°→160.7° raw and −1.4°→129.8° zeroed, and the
+   * saved records were indistinguishable.
+   *
+   * `captured` is passed explicitly rather than inferred from a non-zero
+   * offset, for the same reason CalibrationManager tracks its own flag: an
+   * offset of exactly 0.0 is a legitimate capture.
+   *
+   * @param {number|null}  offset   degrees subtracted from each raw angle
+   * @param {boolean|null} captured whether a zero was actually captured
+   */
+  setCalibration(offset, captured) {
+    this._calOffset  = offset ?? null
+    this._calibrated = captured ?? null
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
@@ -118,6 +144,12 @@ export class SessionRecorder {
       // shoulder/ankle numbers are not comparable with 'perjoint1' sessions —
       // and are not recoverable, since the offset used was never stored.
       angleConvention: 'perjoint1',
+      // Calibration state these angles were measured under. `calibrated` is
+      // null — not false — when no state was supplied, because absence means
+      // "never recorded", which is a different claim from "recorded raw". Old
+      // sessions carry neither field and must not be read as un-zeroed.
+      calibrated:       this._calibrated,
+      calibrationOffset: this._calOffset,
       notes:         '',
       app_version:   '0.1.0',
       // Supabase Storage paths for the two overlay snapshots. Null until the

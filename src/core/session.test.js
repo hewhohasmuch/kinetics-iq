@@ -95,6 +95,50 @@ describe('SessionRecorder', () => {
     expect(session.side).toBe('right')
   })
 
+  // ─── setCalibration ───────────────────────────────────────────────
+  //
+  // The offset lives in device-global settings that are cleared on every
+  // joint/side/patient switch, so unless it is stamped here a saved session
+  // cannot say whether its numbers were raw or re-based on a captured neutral.
+
+  it('stamps the calibration state onto the session', () => {
+    recorder.setCalibration(-1.4, true)
+    recorder.start()
+    recorder.record(45)
+    const session = recorder.stop()
+    expect(session.calibrated).toBe(true)
+    expect(session.calibrationOffset).toBe(-1.4)
+  })
+
+  // A captured offset of exactly 0.0 is legitimate — the joint really was at
+  // neutral — which is why `captured` is passed explicitly rather than inferred
+  // from a non-zero offset.
+  it('records a captured zero of exactly 0 as calibrated', () => {
+    recorder.setCalibration(0, true)
+    recorder.start()
+    recorder.record(45)
+    const session = recorder.stop()
+    expect(session.calibrated).toBe(true)
+    expect(session.calibrationOffset).toBe(0)
+  })
+
+  it('records an un-zeroed recording as explicitly false', () => {
+    recorder.setCalibration(0, false)
+    recorder.start()
+    recorder.record(45)
+    expect(recorder.stop().calibrated).toBe(false)
+  })
+
+  // Absence is a third state: "never recorded" is not the same claim as
+  // "measured raw", and old sessions carry neither field.
+  it('leaves the calibration state null when it was never supplied', () => {
+    recorder.start()
+    recorder.record(45)
+    const session = recorder.stop()
+    expect(session.calibrated).toBeNull()
+    expect(session.calibrated).not.toBe(false)
+  })
+
   // ─── Edge cases ───────────────────────────────────────────────────
 
   it('ignores null samples (marker lost frames)', () => {

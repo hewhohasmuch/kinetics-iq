@@ -194,6 +194,18 @@ async function main() {
       pass('no inline image bytes on the saved session (localStorage stays small)')
     else fail('session still carries inline peakFrame/minFrame bytes')
 
+    // Calibration provenance. The harness seeds calibration_offset 0 and never
+    // taps Set Zero, so this session was recorded RAW — and must say so
+    // explicitly. `false` and "absent" are different claims: absent means the
+    // session never recorded its calibration state, which is what pre-stamp
+    // sessions look like and what the detail view reports as unknown.
+    if (s.calibrated === false)
+      pass('un-zeroed session recorded calibrated:false (not absent)')
+    else fail(`expected calibrated:false on an un-zeroed session, got ${JSON.stringify(s.calibrated)}`)
+    if (s.calibrationOffset === 0)
+      pass(`calibration offset stamped (${s.calibrationOffset}°)`)
+    else fail(`expected calibrationOffset 0, got ${JSON.stringify(s.calibrationOffset)}`)
+
     // Read the blobs back out of IndexedDB (real store in headless Chromium).
     // Poll briefly — persistence is async, running just after the save.
     let imgs = []

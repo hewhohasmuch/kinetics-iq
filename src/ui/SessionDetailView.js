@@ -2,16 +2,26 @@
  * SessionDetailView.js
  *
  * Shows the full detail of a single session:
- *   - Stat cards: ROM, Min, Max, Duration
+ *   - Stat cards: the ROM arc, both extremes named per joint, duration
+ *   - Provenance: whether the session was zeroed, and whether its numbers are
+ *     comparable with a current recording
  *   - Full angle timeline chart (Chart.js)
- *   - Notes
+ *   - Notes, editable after the fact
  *   - Delete button
+ *
+ * THE EXTREMES ARE NAMED, NOT NUMBERED. The cards used to read "Min" and
+ * "Max", which say nothing about what motion produced them — and the frame
+ * captions right below them already said "Peak flexion". Both now read from
+ * extremeLabels() so the card and the picture beneath it cannot disagree about
+ * the same number.
  *
  * Receives a session object directly — loaded by HistoryView before navigating.
  */
 
-import { deleteSession } from '../core/storage.js'
-import { motionTerms } from '../core/angle.js'
+import { deleteSession, saveSession } from '../core/storage.js'
+import { SessionRecorder } from '../core/session.js'
+import { extremeLabels, jointLabel, positionLabel, romArc, motionLabel } from '../core/labels.js'
+import { sessionProvenance, calibrationSummary } from '../core/provenance.js'
 import { getImage, cacheUploaded } from '../core/imageStore.js'
 import { getClient, isConfigured } from '../core/supabase.js'
 import { Chart } from 'chart.js/auto'
@@ -52,10 +62,16 @@ export class SessionDetailView {
   _render() {
     const s = this.session
 
-    // Stat cards
-    document.getElementById('stat-rom').textContent  = `${s.rom}°`
-    document.getElementById('stat-min').textContent  = `${s.min}°`
-    document.getElementById('stat-max').textContent  = `${s.max}°`
+    // Stat cards. The arc leads — a knee lacking 5° of extension and one with
+    // full extension subtract to the same total, and the deficit is the
+    // finding, so `rom` alone cannot be the headline figure.
+    const { maxLabel, minLabel } = extremeLabels(s.joint, s.min)
+    document.getElementById('stat-rom').textContent   = romArc(s.min, s.max)
+    document.getElementById('stat-rom-total').textContent = `${s.rom}° total`
+    document.getElementById('stat-min').textContent   = `${s.min}°`
+    document.getElementById('stat-max').textContent   = `${s.max}°`
+    document.getElementById('stat-min-label').textContent = minLabel
+    document.getElementById('stat-max-label').textContent = maxLabel
     document.getElementById('stat-dur').textContent  = this._formatDuration(s.duration_s)
     document.getElementById('stat-samples').textContent = `${s.samples} samples`
 
@@ -63,22 +79,17 @@ export class SessionDetailView {
     document.getElementById('detail-title').textContent =
       `${this._formatDate(s.date)}  ${this._formatTime(s.timestamp)}`
     const jointEl = document.getElementById('detail-joint')
-    jointEl.textContent = this._jointLabel(s)
-    if (s.position) {
+    jointEl.textContent = jointLabel(s)
+    const position = positionLabel(s.position)
+    if (position) {
       const badge = document.createElement('span')
       badge.className = 'detail-position-badge'
-      badge.textContent = s.position.charAt(0).toUpperCase() + s.position.slice(1)
+      badge.textContent = position
       jointEl.appendChild(badge)
     }
 
-    // Notes
-    const notesEl = document.getElementById('detail-notes')
-    if (s.notes) {
-      notesEl.textContent    = s.notes
-      notesEl.style.display  = 'block'
-    } else {
-      notesEl.style.display  = 'none'
-    }
+    this._renderProvenance(s)
+    this._renderNotes()
 
     // ROM frames load asynchronously from IndexedDB (local cache) or the cloud
     // — see _renderFrames. Not awaited: the rest of the detail renders now.
@@ -93,6 +104,101 @@ export class SessionDetailView {
 
     document.getElementById('btn-detail-delete')
       .addEventListener('click', () => this._handleDelete())
+
+    document.getElementById('detail-notes')
+      .addEventListener('click', () => this._openNotesEditor())
+    document.getElementById('btn-notes-save')
+      .addEventListener('click', () => this._saveNotes())
+    document.getElementById('btn-notes-cancel')
+      .addEventListener('click', () => this._renderNotes())
+  }
+
+  /**
+   * How much this session's numbers can be trusted, in one line each.
+   *
+   * Both facts were previously stored (or, for calibration, not stored at all)
+   * and never shown, which is the dangerous direction: a session recorded under
+   * the old filter reads systematically low at the extremes, and sitting next
+   * to a current one it looks like the patient improved.
+   */
+  _renderProvenance(s) {
+    const row = document.getElementById('detail-provenance')
+    if (!row) return
+
+    const parts = []
+
+    // Whether a zero was captured. Absence is its own state — a session saved
+    // before this was recorded cannot be described as raw, only as unknown.
+    const cal = calibrationSummary(s)
+    parts.push(
+      `<span class="prov-chip${cal.known ? '' : ' unknown'}">${cal.text}</span>`
+    )
+
+    const prov = sessionProvenance(s)
+    if (prov.level !== 'ok') {
+      parts.push(
+        `<span class="prov-chip legacy" title="${prov.reason}">⚠ ${prov.label}</span>`
+      )
+    }
+
+    row.innerHTML = parts.join('')
+  }
+
+  // ─── Notes ───────────────────────────────────────────────────────────
+
+  /**
+   * Notes are editable here, not only at capture time. They used to be
+   * write-once in the panel that appears straight after Stop & Save — the one
+   * moment a clinician is least likely to be typing — and read-only forever
+   * afterwards.
+   */
+  _renderNotes() {
+    const display = document.getElementById('detail-notes')
+    const editor  = document.getElementById('notes-editor')
+    if (!display || !editor) return
+
+    editor.style.display  = 'none'
+    display.style.display = 'block'
+    display.textContent   = this.session.notes || 'Add a note'
+    display.classList.toggle('empty', !this.session.notes)
+  }
+
+  _openNotesEditor() {
+    const display = document.getElementById('detail-notes')
+    const editor  = document.getElementById('notes-editor')
+    const input   = document.getElementById('notes-edit-input')
+    if (!display || !editor || !input) return
+
+    input.value           = this.session.notes || ''
+    display.style.display = 'none'
+    editor.style.display  = 'block'
+    input.focus()
+  }
+
+  _saveNotes() {
+    const input = document.getElementById('notes-edit-input')
+    if (!input) return
+
+    // Same 200-char cap the capture path applies, enforced in one place rather
+    // than re-implemented here.
+    const updated = SessionRecorder.attachNotes({ ...this.session }, input.value)
+    if (!updated) return
+
+    if (saveSession(updated)) {
+      // saveSession upserts by id, stamps updated_at and enqueues the sync op.
+      this.session = updated
+    } else {
+      this._showNotesError()
+      return
+    }
+    this._renderNotes()
+  }
+
+  _showNotesError() {
+    const err = document.getElementById('notes-error')
+    if (!err) return
+    err.style.display = 'block'
+    setTimeout(() => { err.style.display = 'none' }, 3000)
   }
 
   /**
@@ -107,18 +213,17 @@ export class SessionDetailView {
     const framesEl = document.getElementById('detail-frames')
     if (!framesEl) return
 
-    // The motion is named per joint — a shoulder elevates, an ankle dorsiflexes.
-    // The min frame is only the NEGATIVE motion when the value actually crossed
-    // the zero point; an un-zeroed shoulder resting at 24.6° of elevation was
-    // being captioned "Peak extension: 24.6°", which it is not. Both captions
-    // keep the signed value the overlay burned into the image — an abs() here
-    // would put two different numbers on one picture.
-    const terms   = motionTerms(s.joint)
-    const minTerm = s.min < 0 ? `Peak ${terms.negative}` : `Min ${terms.positive}`
+    // The motion is named per joint — a shoulder elevates, an ankle dorsiflexes
+    // — and the min frame is only the NEGATIVE motion when the value actually
+    // crossed the zero point. extremeLabels() owns that rule so these captions
+    // and the stat cards above them stay in step. Both captions keep the signed
+    // value the overlay burned into the image — an abs() here would put two
+    // different numbers on one picture.
+    const { maxLabel, minLabel } = extremeLabels(s.joint, s.min)
 
     const specs = [
-      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `Peak ${terms.positive}: ${s.max}°` },
-      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `${minTerm}: ${s.min}°` },
+      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `${maxLabel}: ${s.max}°` },
+      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `${minLabel}: ${s.min}°` },
     ]
 
     let shown = 0
@@ -191,8 +296,10 @@ export class SessionDetailView {
     })
 
     // Axis is named for the joint's positive motion, not a blanket "Flexion".
-    const motion    = motionTerms(this.session?.joint).positive
-    const axisLabel = `${motion.charAt(0).toUpperCase()}${motion.slice(1)} (°)`
+    // This string used to go only into the dataset label, which the disabled
+    // legend never rendered — so nothing on screen said whether the axis was
+    // flexion, elevation or dorsiflexion. It is now the axis title as well.
+    const axisLabel = `${motionLabel(this.session?.joint)} (°)`
 
     // Load Chart.js dynamically if not already available.
     // innerHTML does not execute <script> tags — we must use this approach.
@@ -242,6 +349,12 @@ export class SessionDetailView {
               grid: { color: 'rgba(255,255,255,0.04)' },
             },
             y: {
+              title: {
+                display: true,
+                text:    axisLabel,
+                color:   '#777',
+                font:    { size: 11 },
+              },
               ticks: {
                 color:    '#555',
                 font:     { size: 11 },
@@ -271,17 +384,6 @@ export class SessionDetailView {
     if (!confirm('Delete this session? This cannot be undone.')) return
     deleteSession(this.session.id)
     this.onBack()
-  }
-
-  _jointLabel(session) {
-    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow', ankle: 'Ankle' }
-    if (session.side) {
-      const side = session.side.charAt(0).toUpperCase() + session.side.slice(1)
-      return `${side} ${names[session.joint] || session.joint}`
-    }
-    const [joint, side] = session.joint.split('_')
-    if (side) return `${side.charAt(0).toUpperCase() + side.slice(1)} ${names[joint] || joint}`
-    return names[session.joint] || session.joint
   }
 
   // ─── Formatters ──────────────────────────────────────────────────────
@@ -319,19 +421,23 @@ export class SessionDetailView {
           <button id="btn-detail-delete" class="btn-delete-sm">Delete</button>
         </div>
 
-        <!-- Stat cards -->
+        <!-- Provenance: how much these numbers can be trusted -->
+        <div id="detail-provenance" class="detail-provenance"></div>
+
+        <!-- Stat cards. The arc leads; the total is secondary. -->
         <div class="stat-cards">
           <div class="stat-card stat-card-primary">
-            <div id="stat-rom"  class="stat-value">--</div>
+            <div id="stat-rom"  class="stat-value stat-value-arc">--</div>
             <div class="stat-label">ROM</div>
+            <div id="stat-rom-total" class="stat-sub">--</div>
           </div>
           <div class="stat-card">
             <div id="stat-min"  class="stat-value">--</div>
-            <div class="stat-label">Min</div>
+            <div id="stat-min-label" class="stat-label">Min</div>
           </div>
           <div class="stat-card">
             <div id="stat-max"  class="stat-value">--</div>
-            <div class="stat-label">Max</div>
+            <div id="stat-max-label" class="stat-label">Max</div>
           </div>
           <div class="stat-card">
             <div id="stat-dur"  class="stat-value">--</div>
@@ -339,8 +445,21 @@ export class SessionDetailView {
           </div>
         </div>
 
-        <!-- Notes -->
-        <div id="detail-notes" class="detail-notes"></div>
+        <!-- Notes — editable here, not only at capture time -->
+        <div class="notes-section">
+          <div id="detail-notes" class="detail-notes"></div>
+          <div id="notes-editor" class="notes-editor" style="display:none">
+            <textarea id="notes-edit-input" class="notes-edit-input" rows="2"
+                      maxlength="200" placeholder="Add a note… (day 14 post-op, after warm-up)"></textarea>
+            <div class="notes-editor-actions">
+              <button id="btn-notes-save" class="btn-notes-save">Save</button>
+              <button id="btn-notes-cancel" class="btn-notes-cancel">Cancel</button>
+            </div>
+          </div>
+          <div id="notes-error" class="notes-error" style="display:none">
+            Could not save the note — storage may be full.
+          </div>
+        </div>
 
         <!-- ROM extreme frames -->
         <div id="detail-frames" class="peak-frame-section" style="display:none">
@@ -482,6 +601,12 @@ export class SessionDetailView {
           font-size: 26px;
         }
 
+        /* The arc carries two numbers and a dash where the total carried one. */
+        .stat-card-primary .stat-value-arc {
+          font-size: 19px;
+          white-space: nowrap;
+        }
+
         .stat-label {
           font-size: 11px;
           color: #666;
@@ -490,9 +615,53 @@ export class SessionDetailView {
           letter-spacing: 0.05em;
         }
 
+        /* Motion names are longer than "Min"/"Max" and must not be clipped. */
+        .stat-card .stat-label {
+          font-size: 10px;
+          line-height: 1.25;
+          letter-spacing: 0.03em;
+        }
+
+        .stat-sub {
+          font-size: 10px;
+          color: #4ade80;
+          opacity: 0.65;
+          margin-top: 3px;
+          font-variant-numeric: tabular-nums;
+        }
+
+        /* Provenance chips */
+        .detail-provenance {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          padding: 12px 16px 0;
+        }
+
+        .prov-chip {
+          background: #1a1a1a;
+          color: #888;
+          border: 1px solid #262626;
+          border-radius: 999px;
+          padding: 3px 9px;
+          font-size: 11px;
+          font-weight: 500;
+        }
+
+        /* "Calibration not recorded" is a different claim from "measured raw",
+           and reads dimmer so it is not mistaken for a positive finding. */
+        .prov-chip.unknown { color: #5a5a5a; font-style: italic; }
+
+        .prov-chip.legacy {
+          background: rgba(251,191,36,0.12);
+          border-color: rgba(251,191,36,0.35);
+          color: #fbbf24;
+        }
+
         /* Notes */
+        .notes-section { margin: 12px 16px 0; }
+
         .detail-notes {
-          margin: 12px 16px 0;
           padding: 10px 14px;
           background: #1a1a1a;
           border-radius: 8px;
@@ -500,6 +669,49 @@ export class SessionDetailView {
           color: #aaa;
           font-style: italic;
           line-height: 1.5;
+          cursor: pointer;
+        }
+
+        .detail-notes:active { background: #222; }
+
+        .detail-notes.empty { color: #555; }
+
+        .notes-edit-input {
+          width: 100%;
+          box-sizing: border-box;
+          padding: 10px 14px;
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 8px;
+          font-size: 14px;
+          color: #f0f0f0;
+          font-family: inherit;
+          line-height: 1.5;
+          resize: vertical;
+        }
+
+        .notes-editor-actions {
+          display: flex;
+          gap: 8px;
+          margin-top: 8px;
+        }
+
+        .btn-notes-save, .btn-notes-cancel {
+          flex: 1;
+          padding: 8px;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 600;
+          border: none;
+        }
+
+        .btn-notes-save   { background: #4ade80; color: #0a0a0a; }
+        .btn-notes-cancel { background: #1a1a1a; color: #888; border: 1px solid #333; }
+
+        .notes-error {
+          margin-top: 8px;
+          font-size: 12px;
+          color: #f87171;
         }
 
         /* ROM extreme frames */
