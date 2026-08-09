@@ -17,7 +17,7 @@ Run a single test file:
 npx vitest run src/core/angle.test.js
 ```
 
-To run the app in cloud mode locally, copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`. Without those set, the app runs local-only (no login, no sync) — see Accounts & cloud sync below. Apply `supabase/schema.sql` to a fresh project; for a project that predates cloud image sync, apply `supabase/migrations/0001_session_images.sql` instead (adds the `peak/min_frame_path` columns and the private `session-images` Storage bucket + RLS). Snapshot upload silently no-ops until that bucket exists. An existing project also needs `0003_angle_metadata.sql` (`angle_filter`, `angle_convention`) — **apply it before deploying**, because PostgREST 4xxs an insert naming an unknown column and `sync.js` drops permanent errors, so sessions would stop syncing silently rather than fail loudly.
+To run the app in cloud mode locally, copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`. Without those set, the app runs local-only (no login, no sync) — see Accounts & cloud sync below. Apply `supabase/schema.sql` to a fresh project; for a project that predates cloud image sync, apply `supabase/migrations/0001_session_images.sql` instead (adds the `peak/min_frame_path` columns and the private `session-images` Storage bucket + RLS). Snapshot upload silently no-ops until that bucket exists. An existing project also needs `0002_face_redaction.sql` (a column the app no longer uses — head redaction was removed in #17 — kept as the only record of which stored snapshots had any redaction applied) and `0003_angle_metadata.sql` (`angle_filter`, `angle_convention`) — **apply it before deploying**, because PostgREST 4xxs an insert naming an unknown column and `sync.js` drops permanent errors, so sessions would stop syncing silently rather than fail loudly.
 
 `npm run verify:e2e` covers the part unit tests can't reach — camera start, MediaPipe detection, the overlay canvas, snapshot compositing, and what actually lands in localStorage. It builds a fake-camera y4m from a real pose photo (mirrored halfway through so the measured angle moves) and asserts, among other things, that the saved min/max are values the readout actually displayed. See `scripts/e2e/README.md`; add `--headed` to watch it. Headless Chromium runs BlazePose on CPU at ~2Hz rather than the app's 10Hz, so anything sensitive to the real frame rate still needs a device check.
 
@@ -44,7 +44,7 @@ Without Supabase env vars, `boot()` skips Login entirely and the app behaves as 
 Each detection frame at 10Hz follows this pipeline:
 
 ```
-PoseDetector.detect(videoElement)   [MediaPipe BlazePose Full, CDN-loaded]
+PoseDetector.detect(frameCanvas)    [MediaPipe BlazePose Full, CDN-loaded; canvas, not the live video — see below]
   → getJointPoints3D(markers) ?? getJointPoints(markers)  [prefer 3D world-space landmarks; fall back to 2D pixel points if any marker lacks world data]
   → jointAngle(proximal, joint, distal)  [interior angle at selected joint in degrees; uses x/y/z when present, reduces to 2D math otherwise]
   → toClinicalAngle(interior, joint)     [per-joint mapping to clinical degrees: 0° = neutral]
@@ -89,7 +89,7 @@ Once the mapping stopped being one formula, "flexion" stopped being one word. **
 
 `PoseDetector.init()` loads the BlazePose Full model (~7MB) from Google's CDN on first use. The WASM runtime is loaded from jsDelivr. Both are cached by the Workbox service worker (90-day TTL) so subsequent loads are instant and offline-capable.
 
-`PoseDetector.detect(videoElement)` passes the live video element directly to MediaPipe (no canvas capture needed). MediaPipe returns normalized landmarks (0–1) plus metric world landmarks; the detector multiplies normalized coords by `videoWidth`/`videoHeight` to produce video pixel coordinates for the 2D path, and passes world `{x,y,z}` through for the 3D path.
+`PoseDetector.detect()` accepts **either** a video element or a canvas — `detectForVideo` takes any `TexImageSource`. In the app it is always given `MeasureView`'s per-tick frame-buffer canvas, never the live `<video>`, so that detection and the stored snapshot read identical pixels (see "The video frame is read once per tick" above). It therefore reads `videoWidth ?? width` / `videoHeight ?? height` rather than assuming a video element. (Its parameter is still *named* `videoElement` — a leftover from when that was true.) MediaPipe returns normalized landmarks (0–1) plus metric world landmarks; the detector multiplies normalized coords by those dimensions to produce video pixel coordinates for the 2D path, and passes world `{x,y,z}` through for the 3D path.
 
 Landmark roles (proximal → joint → distal) per joint, from `JOINT_CONFIG`:
 ```
