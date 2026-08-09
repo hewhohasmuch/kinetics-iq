@@ -23,8 +23,6 @@
  * phone orientation, video resolution, or screen size.
  */
 
-import { redactionGeometry } from '../core/headRegion.js'
-
 const MARKER_COLORS = {
   proximal: '#60a5fa',
   joint:    '#4ade80',
@@ -35,7 +33,6 @@ const LINE_COLOR     = 'rgba(255, 255, 255, 0.7)'
 const ARC_COLOR      = '#facc15'
 const ANGLE_TEXT_BG  = 'rgba(0, 0, 0, 0.65)'
 const ANGLE_TEXT_FG  = '#ffffff'
-const REDACTION_FILL = '#111827'   // opaque fallback where ctx.filter is unsupported
 
 export class Overlay {
   constructor() {
@@ -47,42 +44,11 @@ export class Overlay {
     this._offsetY  = 0
     this._videoW   = 0
     this._videoH   = 0
-    // Reused across frames — a fresh canvas per frame at 10Hz is needless GC churn.
-    this._scratch          = null
-    this._filterSupported  = false
   }
 
   attach(canvasElement) {
-    this.canvas    = canvasElement
-    this.ctx       = canvasElement.getContext('2d')
-    this._filterSupported = this._detectFilterSupport()
-  }
-
-  /**
-   * Canvas 2D filter support, probed rather than assumed. Where it is missing,
-   * assigning ctx.filter is a silent no-op and a blur draw would emit a SHARP
-   * face. The redaction degrades to an opaque fill instead — blur → solid,
-   * never blur → nothing.
-   *
-   * Probes the SCRATCH canvas's context, because that is where the filter is
-   * actually applied (see _drawRedaction). Probing the overlay context would
-   * answer a question we no longer ask.
-   */
-  _detectFilterSupport() {
-    try {
-      const probe = this._getScratch(1, 1).getContext('2d')
-      probe.filter = 'blur(2px)'
-      const ok = probe.filter === 'blur(2px)'
-      probe.filter = 'none'
-      return ok
-    } catch (_) {
-      return false
-    }
-  }
-
-  /** What this device actually does — stamped onto the session record. */
-  get redactionMode() {
-    return this._filterSupported ? 'blur1' : 'solid1'
+    this.canvas = canvasElement
+    this.ctx    = canvasElement.getContext('2d')
   }
 
   /**
@@ -154,17 +120,10 @@ export class Overlay {
    * @param {number|null} [opts.labelAngle] - clinical angle to print; must be the
    *                        same value the readout shows. Falls back to the hinge
    *                        convention when absent.
-   * @param {object|null} [opts.head]  - head circle in video pixel space, to redact
-   * @param {HTMLVideoElement|null} [opts.video] - source for the blurred patch
    */
   draw(markers, interiorAngle, opts = {}) {
     if (!this.ctx) return
     this.clear()
-
-    // BEFORE the no-markers early return below. Losing the joint landmarks
-    // mid-session — patient shifts, limb leaves frame — must not un-blur the
-    // preview at exactly the moment the clinician looks at the screen to fix it.
-    this._drawRedaction(opts.head ?? null, opts.video ?? null)
 
     const roles = Object.keys(markers)
     if (roles.length === 0) {
@@ -227,107 +186,6 @@ export class Overlay {
   // All coordinates here are already in display CSS pixel space.
   // _scalePx() scales UI element sizes (dots, line widths) relative to
   // the display height so they look consistent on all screen sizes.
-
-  /**
-   * Blur the patient's head out of the frame.
-   *
-   * Drawn into the OVERLAY canvas, which is what makes the live preview and the
-   * stored snapshot agree by construction: MeasureView._captureFrameTo()
-   * composites this same canvas over the video frame, so both surfaces come
-   * from this one code path and cannot drift apart.
-   *
-   * WHERE THE BLUR IS APPLIED, AND WHY IT MATTERS.
-   *
-   * resize() leaves the OVERLAY context with a non-identity CTM
-   * (`setTransform(dpr,0,0,dpr,0,0)`) so the rest of this file can draw in CSS
-   * pixels. Whether Canvas 2D `filter` blur lengths are scaled by the CTM is
-   * not settled across engines. If they are NOT, a blur set on the overlay
-   * context lands at 1/dpr of its intended strength — on a dpr-3 iPhone that
-   * is an effective sigma of 0.35/3 ≈ 0.117 × head radius, badly
-   * under-blurred, while the session is still stamped 'blur1'. A redaction
-   * that silently weakens itself and still reports success is the worst
-   * failure mode this feature has.
-   *
-   * So the blur is applied on the SCRATCH canvas, whose CTM is the identity —
-   * the question becomes moot rather than being answered. The scratch is sized
-   * in DEVICE pixels (`ceil(g.size * dpr)`) so the patch is blurred at native
-   * resolution instead of being upsampled by dpr on the way out, and the blur
-   * radius is scaled to match. The scratch is then blitted to the overlay
-   * UNFILTERED, at CSS-pixel coordinates, inside the circular clip.
-   *
-   * redactionGeometry() is untouched: its padding = 2 × blurRadius coupling
-   * still holds, because both terms are scaled by the same dpr here.
-   *
-   * @param {{cx:number,cy:number,r:number}|null} head - VIDEO pixel space
-   * @param {HTMLVideoElement|null} video
-   */
-  _drawRedaction(head, video) {
-    if (!head || !video) return
-
-    const ctx = this.ctx
-    const display = {
-      cx: head.cx * this._scale + this._offsetX,
-      cy: head.cy * this._scale + this._offsetY,
-      r:  head.r  * this._scale,
-    }
-    const g = redactionGeometry(display)
-    if (!g) return
-
-    ctx.save()
-    // Set explicitly: the helpers in this file leave globalAlpha dirty, and a
-    // translucent redaction leaks the sharp face straight through — in the
-    // snapshot and the live view alike, since both sit over raw video pixels.
-    ctx.globalAlpha = 1
-
-    ctx.beginPath()
-    ctx.arc(display.cx, display.cy, display.r, 0, Math.PI * 2)
-    ctx.clip()
-
-    if (this._filterSupported) {
-      // Padded source square, back in video pixel space.
-      const sx = (g.x - this._offsetX) / this._scale
-      const sy = (g.y - this._offsetY) / this._scale
-      const ss = g.size / this._scale
-
-      // Device pixels, matching how resize() sizes the overlay canvas itself.
-      const dpr     = window.devicePixelRatio || 1
-      const size    = Math.max(1, Math.ceil(g.size * dpr))
-      const scratch = this._getScratch(size, size)
-      const sctx    = scratch.getContext('2d')
-
-      // Fill opaque BEFORE blitting, and unfiltered. Where the head sits near a
-      // frame edge the padded square runs off the video, leaving transparent
-      // scratch pixels — blurring toward transparent inside the clip would let
-      // the video show through. Blurring toward a solid colour cannot.
-      sctx.filter    = 'none'
-      sctx.fillStyle = REDACTION_FILL
-      sctx.fillRect(0, 0, size, size)
-
-      // The blur happens HERE, on the identity-CTM scratch context.
-      sctx.filter = `blur(${g.blurRadius * dpr}px)`
-      sctx.drawImage(video, sx, sy, ss, ss, 0, 0, size, size)
-      sctx.filter = 'none'
-
-      // Out to the overlay UNFILTERED — the pixels are already blurred, and a
-      // second filter here would be the very CTM-dependent blur this avoids.
-      ctx.filter = 'none'
-      ctx.drawImage(scratch, g.x, g.y, g.size, g.size)
-    } else {
-      ctx.fillStyle = REDACTION_FILL
-      ctx.fillRect(g.x, g.y, g.size, g.size)
-    }
-
-    ctx.restore()
-  }
-
-  _getScratch(w, h) {
-    if (!this._scratch) this._scratch = document.createElement('canvas')
-    if (this._scratch.width !== w || this._scratch.height !== h) {
-      this._scratch.width  = w
-      this._scratch.height = h
-    }
-    return this._scratch
-  }
 
   _drawLandmarkDot(center, color, visibility = 1) {
     const r   = this._scalePx(10)

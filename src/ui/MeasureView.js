@@ -829,7 +829,7 @@ export class MeasureView {
       return
     }
     this._hideError()
-    this.recorder.setContext(this._joint, this._side, this._position, this.overlay.redactionMode)
+    this.recorder.setContext(this._joint, this._side, this._position)
     this.recorder.start()
     this._maxAngle    = -Infinity
     this._minAngle    = Infinity
@@ -960,15 +960,13 @@ export class MeasureView {
     if (!videoEl.videoWidth || !videoEl.videoHeight) return  // no frame yet
 
     // Grab the video frame ONCE into a reusable offscreen canvas, then feed
-    // that SAME canvas to detection, the overlay's blur source, and the
-    // retained snapshot below. `videoEl` is a live element — three separate
-    // `drawImage(videoEl, ...)` calls later in this tick (or worse, one now
-    // and one after MediaPipe's async-ish detection) can each see a
-    // different frame if the stream advances in between. The face-blur
-    // circle is positioned from whichever frame detection saw; if the
-    // snapshot pixels come from a later frame, the blur ends up offset from
-    // the face in the stored JPEG instead of sitting on it. One buffer makes
-    // preview, analysis and stored photo the same pixels by construction.
+    // that SAME canvas to detection and to the retained snapshot below.
+    // `videoEl` is a live element: two separate `drawImage(videoEl, ...)` reads
+    // in one tick — one for detection, one after it for the capture — can each
+    // see a different decoded frame. The angle is computed from the landmarks
+    // detection saw; if the snapshot pixels come from a later frame, the number
+    // burned into the stored image describes a frame it does not depict. One
+    // buffer makes analysis and stored photo the same pixels by construction.
     if (!this._frameCanvas) this._frameCanvas = document.createElement('canvas')
     const frame = this._frameCanvas
     if (frame.width !== videoEl.videoWidth || frame.height !== videoEl.videoHeight) {
@@ -979,7 +977,7 @@ export class MeasureView {
     }
     frame.getContext('2d').drawImage(videoEl, 0, 0, frame.width, frame.height)
 
-    const { markers, allFound, head, headResolved } = this.detector.detect(frame)
+    const { markers, allFound } = this.detector.detect(frame)
 
     // ── Angle calculation ──────────────────────────────────────────
     let rawFlexion  = null
@@ -1034,12 +1032,6 @@ export class MeasureView {
     this.overlay.draw(markers, toInteriorAngle(displayAngle, this._joint), {
       joint:      this._joint,
       labelAngle: displayAngle,
-      // Head redaction is drawn into the overlay, so the snapshot composited
-      // below inherits it from this same call — one code path, both surfaces.
-      // `video` is the per-tick frame buffer, not the live element — see the
-      // frame-grab comment above _runDetection's detect() call.
-      head,
-      video:      frame,
     })
 
     // ── Extreme snapshots ──────────────────────────────────────────
@@ -1047,45 +1039,16 @@ export class MeasureView {
     // the overlay canvas, so capturing before the draw burns in the PREVIOUS
     // frame's angle — which put a number from the opposite end of the range
     // onto the peak-extension image.
-    //
-    // Extreme TRACKING (_maxAngle/_minAngle) must stay ungated — it has to
-    // match recorder.record() above exactly, or session.max/min (from the
-    // recorder) and the retained snapshot can end up describing two
-    // different frames. Only the CAPTURE is conditional on `headResolved`.
-    //
-    // `head === null` alone is ambiguous: it means either (a) MediaPipe lost
-    // the pose entirely — displayAngle is a HELD value (MedianFilter3 and
-    // OneEuroFilter both replay their last output on a null push), so it
-    // stays non-null while the overlay drew NO redaction this frame, and
-    // capturing here would leak a possibly-visible face — or (b) the pose is
-    // fine but the head is genuinely off-frame (safe: nothing to redact,
-    // e.g. ankle work, where the app's own framing hint puts the head
-    // off-screen for the whole session) — or a third case headRegion()
-    // itself can't distinguish: a head large enough to be real but whose
-    // radius got capped, landing the clamped circle off-frame while a face
-    // landmark is still a few pixels inside the video (camera held close).
-    // `headResolved` (pose.js — a head region was found, OR headInputsFinite
-    // AND no face landmark is on screen at all) folds all of this into one
-    // boolean: true only when it is provably safe to capture.
-    //
-    // `_maxHasFrame`/`_minHasFrame` track whether the CURRENT extreme was
-    // captured, not whether any frame was ever captured for this recording.
-    // Both the unresolved case and a capture failure (_captureFrameTo
-    // returning false — canvas/video missing, or its try/catch fired) must
-    // clear the flag outright rather than keep a stale `true`: once a new
-    // extreme lands, any previously retained frame no longer depicts it, so
-    // an honest gap — no peak snapshot — beats a confident wrong number
-    // burned into the image.
     if (this.recorder.isActive && displayAngle !== null) {
       // Snapshot both extremes: max flexion (most bent) and min flexion
       // (straightest). Extension tests peak at the minimum, not the maximum.
       if (displayAngle > this._maxAngle) {
         this._maxAngle    = displayAngle
-        this._maxHasFrame = headResolved && this._captureFrameTo('max')
+        this._maxHasFrame = this._captureFrameTo('max') || this._maxHasFrame
       }
       if (displayAngle < this._minAngle) {
         this._minAngle    = displayAngle
-        this._minHasFrame = headResolved && this._captureFrameTo('min')
+        this._minHasFrame = this._captureFrameTo('min') || this._minHasFrame
       }
     }
 
@@ -1116,17 +1079,14 @@ export class MeasureView {
    * are discarded.
    *
    * @param {'max'|'min'} which
-   * @returns {boolean} whether a frame was captured. Load-bearing: the caller
-   *   uses this to decide whether the current extreme gets a persisted
-   *   snapshot at all — false here means no image is retained for `which`,
-   *   not just a logged warning.
+   * @returns {boolean} whether a frame was captured (non-critical if not)
    */
   _captureFrameTo(which) {
     try {
       const overlayCanvas = this._overlayCanvas
-      // Same frame-buffer canvas that fed detect() and overlay.draw() this
-      // tick — not a fresh read of the live video element. See the frame-grab
-      // comment at the top of _runDetection().
+      // Same frame-buffer canvas that fed detect() this tick — not a fresh read
+      // of the live video element. See the frame-grab comment at the top of
+      // _runDetection().
       const frame = this._frameCanvas
       if (!overlayCanvas || !frame) return false
 

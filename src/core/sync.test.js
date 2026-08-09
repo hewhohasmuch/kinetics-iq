@@ -359,22 +359,6 @@ describe('shape mapping', () => {
     expect(back.updated_at).toBe(patient.updated_at)
   })
 
-  it('pushes the face-redaction stamp', () => {
-    const row = sessionToRow({ ...makeSession(), faceRedaction: 'blur1' })
-    expect(row.face_redaction).toBe('blur1')
-  })
-
-  it('pushes null when a session predates redaction', () => {
-    const row = sessionToRow(makeSession())
-    expect(row.face_redaction).toBeNull()
-  })
-
-  it('round-trips the stamp so a pull cannot erase it', () => {
-    const original = { ...makeSession(), faceRedaction: 'solid1' }
-    const back     = rowToSession(sessionToRow(original))
-    expect(back.faceRedaction).toBe('solid1')
-  })
-
   // ─── Angle provenance ────────────────────────────────────────────────
   //
   // These say how a session's numbers were produced, and a session missing

@@ -1,5 +1,22 @@
 # Face redaction in session snapshots
 
+> **STATUS: REVERTED — NOT IN THE PRODUCT (2026-08-08).**
+> Head redaction was removed from KineticsIQ. The blur shipped in PR #15 measured, on
+> device, as displaced by about one head radius with its contents still legible; the
+> opaque occluder that replaced it (PR #16, closed unmerged) needed a seed large enough
+> to cover the acromion in shoulder framing, and two independent parameter sweeps showed
+> **no centred symmetric ellipse can contain wind-blown hair while clearing the shoulder**
+> — the ceiling is q ≈ 1.03 against a `FEATHER_EXTENT` of 1.35, and even a degenerate
+> collapsed seed reaches only 1.337.
+>
+> Kept as a record of what was tried and why it was abandoned, so the reasoning does not
+> have to be rediscovered. **Do not read it as describing current behaviour.** Anyone
+> revisiting head redaction should start from those findings: a real fix needs an
+> asymmetric shape (more reach toward the cranium than toward the joint) or a per-joint
+> seed. The HIPAA analysis in the 2026-08-05 spec stands regardless of mechanism — this
+> was always data minimisation, never de-identification.
+
+
 **Date:** 2026-08-05
 **Status:** Approved design, not yet implemented
 
