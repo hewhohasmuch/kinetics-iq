@@ -421,4 +421,73 @@ describe('shape mapping', () => {
     expect(back.angleFilter).toBe('euro1')
     expect(back.angleConvention).toBe('perjoint1')
   })
+
+  // ─── Calibration provenance ──────────────────────────────────────────
+  //
+  // Whether a session was zeroed, and by how much, is only knowable from these
+  // two fields: the offset itself lives in device-local settings that are
+  // cleared on every joint/side/patient switch. A raw shoulder and a zeroed one
+  // are different measurements of the same joint (roughly 24.6→160.7 against
+  // −1.4→129.8), so losing this in the round-trip makes a validation set
+  // silently mix two populations.
+  //
+  // Pinned in both directions separately, for the same reason the angle stamps
+  // above are: a half-fix still loses the field.
+
+  it('pushes the calibration state', () => {
+    const row = sessionToRow({ ...makeSession(), calibrated: true, calibrationOffset: -1.4 })
+    expect(row.calibrated).toBe(true)
+    expect(row.calibration_offset).toBe(-1.4)
+  })
+
+  // A captured offset of exactly 0.0 is legitimate — the joint really was at
+  // neutral. `?? null` must not collapse it, or a valid capture pushes as "no
+  // offset recorded".
+  it('pushes a captured offset of exactly 0 rather than collapsing it to null', () => {
+    const row = sessionToRow({ ...makeSession(), calibrated: true, calibrationOffset: 0 })
+    expect(row.calibrated).toBe(true)
+    expect(row.calibration_offset).toBe(0)
+  })
+
+  it('pushes an explicit false as false, not as null', () => {
+    const row = sessionToRow({ ...makeSession(), calibrated: false, calibrationOffset: 0 })
+    expect(row.calibrated).toBe(false)
+  })
+
+  it('pushes null for a session that never recorded calibration state', () => {
+    const row = sessionToRow(makeSession())
+    expect(row.calibrated).toBeNull()
+    expect(row.calibration_offset).toBeNull()
+  })
+
+  it('reads the calibration state back off a row', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      calibrated: true, calibration_offset: -1.4,
+      updated_at: new Date(0).toISOString(),
+    })
+    expect(back.calibrated).toBe(true)
+    expect(back.calibrationOffset).toBe(-1.4)
+  })
+
+  // THE DISTINCTION THAT MATTERS. A null column means the session never
+  // recorded whether it was zeroed. Reading that back as `false` would turn
+  // "not recorded" into the positive claim "measured raw", and the UI would
+  // label carefully zeroed legacy sessions as raw ones.
+  it('leaves an absent calibration state undefined, never false', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      updated_at: new Date(0).toISOString(),
+    })
+    expect(back.calibrated).toBeUndefined()
+    expect(back.calibrated).not.toBe(false)
+    expect(back.calibrationOffset).toBeUndefined()
+  })
+
+  it('round-trips calibration state, including a false with a 0 offset', () => {
+    const original = { ...makeSession(), calibrated: false, calibrationOffset: 0 }
+    const back = rowToSession(sessionToRow(original))
+    expect(back.calibrated).toBe(false)
+    expect(back.calibrationOffset).toBe(0)
+  })
 })

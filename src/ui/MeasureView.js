@@ -6,6 +6,7 @@ import { Camera }            from '../detection/camera.js'
 import { PoseDetector }      from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
 import { jointAngle, toClinicalAngle, toInteriorAngle, motionTerms, MedianFilter3, OneEuroFilter } from '../core/angle.js'
+import { JOINT_NAMES, POSITION_NAMES, positionsFor, sideLabel } from '../core/labels.js'
 import { SessionRecorder }   from '../core/session.js'
 import { saveSession, getActivePatientId, getPatient, enqueueImageUpload } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
@@ -22,31 +23,6 @@ const DETECTION_INTERVAL_MS = 1000 / DETECTION_HZ
 // the overlay's thin lines and angle text. ~1 MB retina JPEG → ~120-180 KB.
 const SNAPSHOT_MAX_EDGE = 1100   // px, longest edge
 const SNAPSHOT_QUALITY  = 0.78
-
-// Clinical positions offered per joint, first entry = default.
-//
-// This used to be a hardcoded prone/supine/seated row that was simply HIDDEN
-// for shoulder, elbow and ankle — but _position kept its 'prone' initial value
-// and was still stamped onto the saved session, so standing shoulder
-// measurements went into the patient record as "Prone". Every joint now offers
-// the positions it is actually measured in, so nothing is recorded that the
-// clinician did not pick.
-const JOINT_POSITIONS = {
-  knee:     ['prone', 'supine', 'seated'],
-  hip:      ['supine', 'prone', 'seated'],
-  shoulder: ['standing', 'seated'],
-  elbow:    ['seated', 'standing'],
-  ankle:    ['seated', 'standing'],
-}
-
-const POSITION_NAMES = {
-  prone:    'Prone',
-  supine:   'Supine',
-  seated:   'Seated',
-  standing: 'Standing',
-}
-
-const positionsFor = (joint) => JOINT_POSITIONS[joint] ?? JOINT_POSITIONS.knee
 
 export class MeasureView {
   constructor(container, onShowHistory, onShowPatients) {
@@ -164,9 +140,9 @@ export class MeasureView {
           <!-- Live ROM bar — visible during recording -->
           <div id="rom-bar" class="rom-bar" style="display:none">
             <div class="rom-bar-labels">
-              <span id="rom-min">--°</span>
+              <span class="rom-end"><span id="rom-min">--°</span><em id="rom-min-term">extension</em></span>
               <span class="rom-bar-title">ROM: <strong id="rom-value">--°</strong></span>
-              <span id="rom-max">--°</span>
+              <span class="rom-end rom-end-right"><span id="rom-max">--°</span><em id="rom-max-term">flexion</em></span>
             </div>
           </div>
         </div>
@@ -412,6 +388,16 @@ export class MeasureView {
         }
         .rom-bar-title { color: #f0f0f0; font-size: 14px; }
         .rom-bar-title strong { color: #f87171; }
+        /* Each end of the bar names its own motion, so the two bare numbers
+           can't be read the wrong way round. */
+        .rom-end { display: flex; flex-direction: column; line-height: 1.2; }
+        .rom-end-right { text-align: right; }
+        .rom-end em {
+          font-style: normal;
+          font-size: 10px;
+          color: #666;
+          text-transform: lowercase;
+        }
 
         .controls {
           padding: 8px 16px;
@@ -646,6 +632,8 @@ export class MeasureView {
     this._romBar         = document.getElementById('rom-bar')
     this._romMin         = document.getElementById('rom-min')
     this._romMax         = document.getElementById('rom-max')
+    this._romMinTerm     = document.getElementById('rom-min-term')
+    this._romMaxTerm     = document.getElementById('rom-max-term')
     this._romValue       = document.getElementById('rom-value')
     this._notesPanel     = document.getElementById('notes-panel')
     this._notesInput     = document.getElementById('notes-input')
@@ -830,6 +818,10 @@ export class MeasureView {
     }
     this._hideError()
     this.recorder.setContext(this._joint, this._side, this._position)
+    // Stamp the calibration state onto the session. Safe to read at start
+    // rather than stop: _btnCalibrate is disabled for the whole recording
+    // (below), so the offset cannot move mid-session.
+    this.recorder.setCalibration(this.calibration.offset, this.calibration.isCalibrated)
     this.recorder.start()
     this._maxAngle    = -Infinity
     this._minAngle    = Infinity
@@ -1305,13 +1297,17 @@ export class MeasureView {
   }
 
   _updateSelectionLabel() {
-    const jointNames = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow', ankle: 'Ankle' }
-    const side       = this._side.charAt(0).toUpperCase() + this._side.slice(1)
+    const side  = sideLabel(this._side)
+    const name  = JOINT_NAMES[this._joint] ?? this._joint
     // "flexion" is not the motion at every joint — the shoulder elevates and
     // the ankle dorsiflexes.
-    const motion     = motionTerms(this._joint).positive
-    this._angleLabel.textContent  = `${side} ${jointNames[this._joint]} ${motion}`
-    this._handleLabel.textContent =
-      `${side} ${jointNames[this._joint]} · ${POSITION_NAMES[this._position]}`
+    const terms = motionTerms(this._joint)
+    this._angleLabel.textContent  = `${side} ${name} ${terms.positive}`
+    this._handleLabel.textContent = `${side} ${name} · ${POSITION_NAMES[this._position]}`
+
+    // Name both ends of the live ROM bar. Without these the bar showed two bare
+    // numbers, leaving which end was which to be inferred from their order.
+    if (this._romMinTerm) this._romMinTerm.textContent = terms.negative
+    if (this._romMaxTerm) this._romMaxTerm.textContent = terms.positive
   }
 }

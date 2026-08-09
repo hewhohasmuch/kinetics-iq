@@ -38,6 +38,13 @@ create table public.sessions (
   angle_mode      text,                                -- '3d' | absent = pre-3D/2D-era
   angle_filter    text,                                -- 'euro1' | absent = old moving average, peaks clipped
   angle_convention text,                               -- 'perjoint1' | absent = shoulder inverted, ankle offset 90
+  -- Calibration state at the moment of recording. NULL means never recorded
+  -- (pre-stamp session), which is NOT the same claim as calibrated = false.
+  -- The offset itself lives only in device-local settings and is cleared on
+  -- every joint/side/patient switch, so without these the raw-vs-zeroed
+  -- distinction is unrecoverable once a session is saved.
+  calibrated        boolean,
+  calibration_offset real,                             -- degrees subtracted from each raw angle
   -- HISTORICAL — nothing reads or writes this. Head redaction shipped in #15
   -- ('blur1', or 'solid1' where Canvas 2D filters were unsupported) and was
   -- removed in #17 after two on-device failures. Retained, not dropped: it is

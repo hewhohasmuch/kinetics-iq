@@ -5,6 +5,7 @@
  *
  * Layout:
  *   ┌─────────────────────┐
+ *   │ [Right Knee][L Sh.] │  joint+side chips — scope the chart
  *   │  ROM trend (chart)  │
  *   ├─────────────────────┤
  *   │  Session list       │
@@ -12,8 +13,16 @@
  *   │  [date] [ROM] [del] │
  *   └─────────────────────┘
  *
- * Chart.js is loaded from CDN — no npm install needed.
- * We use a simple line chart showing ROM over time (most recent 10 sessions).
+ * THE CHART IS SCOPED TO ONE JOINT AND SIDE. It used to plot every session the
+ * patient had, in date order, on a single line — so a knee measurement and a
+ * shoulder measurement became consecutive points on one "progress" trend. The
+ * chips pick which joint+side the trend describes; the LIST below stays
+ * unfiltered so nothing is hidden from view.
+ *
+ * IT PLOTS THE ARC, NOT THE SUBTRACTION. Two lines — the peak and the minimum
+ * — because `rom` alone is max minus min, and a knee that gains 10° of flexion
+ * and one that recovers 10° of extension produce an identical rising line.
+ * Watching the two lines converge is the clinically meaningful picture.
  *
  * NAVIGATION:
  * This view receives an onBack callback to return to MeasureView.
@@ -21,6 +30,8 @@
  */
 
 import { loadSessions, deleteSession, getActivePatientId, getPatient } from '../core/storage.js'
+import { jointLabel, positionLabel, romArc, motionLabel } from '../core/labels.js'
+import { sessionProvenance } from '../core/provenance.js'
 import { Chart } from 'chart.js/auto'
 
 export class HistoryView {
@@ -34,6 +45,7 @@ export class HistoryView {
     this.onBack         = onBack
     this.onShowDetail   = onShowDetail
     this._chart         = null
+    this._scope         = null   // { joint, side } the chart is currently showing
   }
 
   mount() {
@@ -60,6 +72,7 @@ export class HistoryView {
     }
 
     this._renderChart(sessions)
+    this._renderScopeChips(sessions)
     this._renderList(sessions)
 
     document.getElementById('btn-back')
@@ -74,13 +87,83 @@ export class HistoryView {
     return loadSessions(getActivePatientId() ?? undefined)
   }
 
+  /**
+   * The distinct joint+side combinations present, newest session first. Each
+   * becomes a chip; the first is the default scope.
+   */
+  _scopesIn(sessions) {
+    const seen   = new Map()
+    for (const s of sessions) {                 // sessions arrive newest-first
+      const { joint, side } = this._scopeOf(s)
+      const key = `${joint}|${side ?? ''}`
+      if (!seen.has(key)) seen.set(key, { joint, side, key, label: jointLabel(s) })
+    }
+    return [...seen.values()]
+  }
+
+  /** A session's scope key parts, tolerating the legacy combined 'knee_right'. */
+  _scopeOf(session) {
+    if (session.side) return { joint: session.joint, side: session.side }
+    const [joint, side] = String(session.joint ?? '').split('_')
+    return { joint, side: side || null }
+  }
+
+  _inScope(session, scope) {
+    if (!scope) return true
+    const s = this._scopeOf(session)
+    return s.joint === scope.joint && s.side === scope.side
+  }
+
+  /**
+   * Chips selecting which joint+side the trend chart describes. Hidden when the
+   * patient only has one, since there is then nothing to choose between.
+   */
+  _renderScopeChips(sessions) {
+    const row = document.getElementById('scope-chips')
+    if (!row) return
+
+    const scopes = this._scopesIn(sessions)
+    if (scopes.length <= 1) {
+      row.style.display = 'none'
+      return
+    }
+
+    row.style.display = 'flex'
+    row.innerHTML = scopes.map(sc => {
+      const active = sc.key === `${this._scope?.joint}|${this._scope?.side ?? ''}` ? ' active' : ''
+      return `<button class="scope-chip${active}" data-key="${sc.key}">${sc.label}</button>`
+    }).join('')
+
+    row.querySelectorAll('.scope-chip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const sc = scopes.find(s => s.key === btn.dataset.key)
+        if (!sc) return
+        this._scope = { joint: sc.joint, side: sc.side }
+        const all = this._loadScopedSessions()
+        this._renderScopeChips(all)
+        this._renderChart(all)
+      })
+    })
+  }
+
   _renderChart(sessions) {
     const canvas = document.getElementById('rom-chart')
     if (!canvas) return
 
-    // Chart shows oldest→newest (reverse of list display)
-    // Take up to last 10 sessions, oldest first
-    const chartData = [...sessions]
+    if (sessions.length === 0) {
+      canvas.parentElement.style.display = 'none'
+      return
+    }
+    canvas.parentElement.style.display = ''
+
+    // Default the trend to whatever was measured most recently.
+    if (!this._scope || !sessions.some(s => this._inScope(s, this._scope))) {
+      this._scope = this._scopeOf(sessions[0])
+    }
+
+    // Chart shows oldest→newest (reverse of list display), last 10 in scope.
+    const chartData = sessions
+      .filter(s => this._inScope(s, this._scope))
       .reverse()
       .slice(-10)
 
@@ -90,65 +173,91 @@ export class HistoryView {
     }
 
     const labels = chartData.map(s => this._formatDate(s.date))
-    const romValues = chartData.map(s => s.rom)
+    const motion = motionLabel(chartData[0].joint)
 
-    // Chart.js is loaded from CDN in the template <script> tag.
-    // It attaches to window.Chart — we wait for it here.
+    // Legacy sessions are marked, not dropped. Excluding them would quietly
+    // change the shape of a trend the clinician is reading as the patient's.
+    const flags       = chartData.map(s => sessionProvenance(s).level !== 'ok')
+    const pointColor  = (ok) => flags.map(bad => bad ? '#fbbf24' : ok)
+    const pointStyle  = flags.map(bad => bad ? 'triangle' : 'circle')
+
     if (this._chart) this._chart.destroy()
 
-    const initChart = () => {
-      this._chart = new Chart(canvas, {
-        type: 'line',
-        data: {
-          labels,
-          datasets: [{
-            label: 'ROM (degrees)',
-            data: romValues,
+    this._chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: `Peak ${motion.toLowerCase()}`,
+            data: chartData.map(s => s.max),
             borderColor: '#4ade80',
-            backgroundColor: 'rgba(74, 222, 128, 0.1)',
+            backgroundColor: 'rgba(74, 222, 128, 0.10)',
             borderWidth: 2,
-            pointBackgroundColor: '#4ade80',
+            pointBackgroundColor: pointColor('#4ade80'),
+            pointStyle,
             pointRadius: 4,
             pointHoverRadius: 6,
             tension: 0.3,
-            fill: true,
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                label: ctx => ` ${ctx.parsed.y}°`
-              }
-            }
+            fill: '+1',            // shade the arc between the two lines
           },
-          scales: {
-            x: {
-              ticks: {
-                color: '#666',
-                font: { size: 11 },
-                maxRotation: 0,
+          {
+            label: 'Minimum',
+            data: chartData.map(s => s.min),
+            borderColor: '#60a5fa',
+            borderWidth: 2,
+            borderDash: [4, 3],
+            pointBackgroundColor: pointColor('#60a5fa'),
+            pointStyle,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            tension: 0.3,
+            fill: false,
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            labels: { color: '#888', boxWidth: 10, font: { size: 10 }, usePointStyle: true },
+          },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}°`,
+              // Total and position ride along in the tooltip: the chips group by
+              // joint+side only, but prone and seated knee flexion are not
+              // strictly comparable either, and that has to stay visible.
+              afterBody: (items) => {
+                const s = chartData[items[0].dataIndex]
+                const lines = [`Total range ${s.rom}°`]
+                const pos = positionLabel(s.position)
+                if (pos) lines.push(pos)
+                const p = sessionProvenance(s)
+                if (p.level !== 'ok') lines.push(`⚠ ${p.label}`)
+                return lines
               },
-              grid: { color: 'rgba(255,255,255,0.05)' },
-            },
-            y: {
-              ticks: {
-                color: '#666',
-                font: { size: 11 },
-                callback: v => `${v}°`,
-              },
-              grid: { color: 'rgba(255,255,255,0.05)' },
-              min: 0,
             }
           }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#666', font: { size: 11 }, maxRotation: 0 },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+          y: {
+            ticks: { color: '#666', font: { size: 11 }, callback: v => `${v}°` },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            // Was `min: 0`, which clipped the extension side of the zero point
+            // straight off the axis. Angles are signed and negative values are
+            // the measurement, not an error.
+            suggestedMin: Math.min(0, ...chartData.map(s => s.min)),
+          }
         }
-      })
-    }
-
-    initChart()
+      }
+    })
   }
 
   _renderList(sessions) {
@@ -190,18 +299,32 @@ export class HistoryView {
     const date     = this._formatDate(session.date)
     const time     = this._formatTime(session.timestamp)
     const duration = this._formatDuration(session.duration_s)
-    const joint    = this._jointLabel(session)
+    const joint    = jointLabel(session)
+    const position = positionLabel(session.position)
+    const prov     = sessionProvenance(session)
+
+    // Badges carry their own spacing rather than a " · " separator: a badge
+    // that wraps to the next line would otherwise leave the dot dangling at the
+    // end of the one above it.
+    const positionBadge = position
+      ? `<span class="position-badge">${position}</span>`
+      : ''
+    // Amber, and carrying the reason as a tooltip: these numbers cannot be
+    // compared with a current recording, and nothing used to say so.
+    const legacyBadge = prov.level !== 'ok'
+      ? `<span class="legacy-badge" title="${prov.reason}">⚠ ${prov.label}</span>`
+      : ''
 
     return `
       <div class="session-row" data-id="${session.id}">
         <div class="session-info">
           <div class="session-date">${date} <span class="session-time">${time}</span></div>
-          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${session.position ? ` · <span class="position-badge">${session.position.charAt(0).toUpperCase() + session.position.slice(1)}</span>` : ''}</div>
+          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${positionBadge}${legacyBadge}</div>
           ${session.notes ? `<div class="session-notes">${session.notes}</div>` : ''}
         </div>
         <div class="session-stats">
-          <div class="stat-rom">${session.rom}°</div>
-          <div class="stat-range">${session.min}° – ${session.max}°</div>
+          <div class="stat-rom">${romArc(session.min, session.max)}</div>
+          <div class="stat-range">${session.rom}° total</div>
         </div>
         <div class="row-chevron">›</div>
         <button class="btn-delete" data-id="${session.id}" aria-label="Delete session">
@@ -217,19 +340,8 @@ export class HistoryView {
     // Re-render the full view with updated data
     const sessions = this._loadScopedSessions()
     this._renderChart(sessions)
+    this._renderScopeChips(sessions)
     this._renderList(sessions)
-  }
-
-  _jointLabel(session) {
-    const names = { knee: 'Knee', hip: 'Hip', shoulder: 'Shoulder', elbow: 'Elbow', ankle: 'Ankle' }
-    if (session.side) {
-      const side = session.side.charAt(0).toUpperCase() + session.side.slice(1)
-      return `${side} ${names[session.joint] || session.joint}`
-    }
-    // old format: 'knee_right' → 'Right Knee'
-    const [joint, side] = session.joint.split('_')
-    if (side) return `${side.charAt(0).toUpperCase() + side.slice(1)} ${names[joint] || joint}`
-    return names[session.joint] || session.joint
   }
 
   // ─── Private: formatters ─────────────────────────────────────────────
@@ -265,13 +377,15 @@ export class HistoryView {
           <h1 class="history-title">History</h1>
         </div>
 
+        <div id="scope-chips" class="scope-chips"></div>
+
         <div class="chart-container">
           <canvas id="rom-chart"></canvas>
         </div>
 
         <div class="list-header">
           <span>Sessions</span>
-          <span class="list-header-hint">ROM = total range</span>
+          <span class="list-header-hint">min – max · total</span>
         </div>
 
         <div id="session-list" class="session-list"></div>
@@ -307,6 +421,40 @@ export class HistoryView {
           padding: 8px 14px;
           font-size: 14px;
           flex-shrink: 0;
+        }
+
+        /* Scopes the trend to one joint+side. Horizontally scrollable rather
+           than wrapping, so a patient with many joints keeps the chart on
+           screen. */
+        .scope-chips {
+          display: flex;
+          gap: 6px;
+          padding: 10px 16px 0;
+          background: #111;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-width: none;
+          flex-shrink: 0;
+        }
+
+        .scope-chips::-webkit-scrollbar { display: none; }
+
+        .scope-chip {
+          background: #1a1a1a;
+          border: 1px solid #262626;
+          color: #888;
+          border-radius: 999px;
+          padding: 5px 11px;
+          font-size: 12px;
+          font-weight: 500;
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+
+        .scope-chip.active {
+          background: rgba(74,222,128,0.12);
+          border-color: rgba(74,222,128,0.4);
+          color: #4ade80;
         }
 
         .chart-container {
@@ -384,6 +532,20 @@ export class HistoryView {
           color: #60a5fa;
           border-radius: 4px;
           padding: 0 4px;
+          margin-left: 5px;
+          font-size: 11px;
+          font-weight: 500;
+        }
+
+        /* Amber, not red: the session is readable, its numbers just are not
+           comparable with a current recording. */
+        .legacy-badge {
+          display: inline-block;
+          background: rgba(251,191,36,0.15);
+          color: #fbbf24;
+          border-radius: 4px;
+          padding: 0 4px;
+          margin-left: 5px;
           font-size: 11px;
           font-weight: 500;
         }
@@ -403,18 +565,21 @@ export class HistoryView {
           flex-shrink: 0;
         }
 
+        /* The arc, not the subtraction — so it carries two numbers and a dash
+           where it used to carry one, and needs to be a little smaller. */
         .stat-rom {
-          font-size: 24px;
+          font-size: 19px;
           font-weight: 700;
           color: #4ade80;
           line-height: 1;
+          white-space: nowrap;
           font-variant-numeric: tabular-nums;
         }
 
         .stat-range {
           font-size: 11px;
           color: #666;
-          margin-top: 2px;
+          margin-top: 3px;
         }
 
         .row-chevron {

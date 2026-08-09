@@ -243,6 +243,13 @@ export function sessionToRow(s) {
     angle_mode:       s.angleMode ?? null,
     angle_filter:     s.angleFilter ?? null,
     angle_convention: s.angleConvention ?? null,
+    // Calibration state travels for the same reason: a session's numbers mean
+    // something different raw than re-based on a captured neutral, and the
+    // offset itself lives only in device-local settings that are cleared on
+    // every joint/side/patient switch. If this were dropped in the round-trip
+    // the session would come back claiming its calibration was never recorded.
+    calibrated:         s.calibrated ?? null,
+    calibration_offset: s.calibrationOffset ?? null,
     notes:          s.notes ?? '',
     app_version:    s.app_version ?? null,
     peak_frame_path: s.peakFramePath ?? null,
@@ -273,6 +280,11 @@ export function rowToSession(row) {
     angleMode:       row.angle_mode ?? undefined,
     angleFilter:     row.angle_filter ?? undefined,
     angleConvention: row.angle_convention ?? undefined,
+    // Same absence rule: `undefined` marks a session that never recorded its
+    // calibration state. Mapping a null column to `false` here would turn "not
+    // recorded" into the positive claim "measured raw".
+    calibrated:        row.calibrated ?? undefined,
+    calibrationOffset: row.calibration_offset ?? undefined,
     notes:         row.notes ?? '',
     app_version:   row.app_version ?? undefined,
     peakFramePath: row.peak_frame_path ?? null,
