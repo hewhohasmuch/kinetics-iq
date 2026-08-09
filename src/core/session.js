@@ -30,26 +30,19 @@ export class SessionRecorder {
     this._joint     = 'knee'
     this._side      = 'right'
     this._position  = null
-    this._faceRedaction = null
   }
 
-  // Set the joint, side, position and face-redaction mode before start() so they
-  // appear in the saved session.
+  // Set the joint, side, and position before start() so they appear in the saved session.
   //
   // An absent position stays null rather than defaulting to 'prone'. That default
   // is what stamped "Prone" onto standing shoulder measurements: the UI hid the
   // position row for joints it considered position-less, but the recorder filled
   // one in anyway and it was written to the patient record. A position nobody
   // chose is not data — the views already omit the badge when it is null.
-  //
-  // faceRedaction is what the DEVICE ACTUALLY DID ('blur1', or 'solid1' where
-  // Canvas 2D filters were unavailable), not what was intended — so a device
-  // that fell back is legible in the record instead of misfiled as blurred.
-  setContext(joint, side, position, faceRedaction = null) {
-    this._joint         = joint
-    this._side          = side
-    this._position      = position ?? null
-    this._faceRedaction = faceRedaction ?? null
+  setContext(joint, side, position) {
+    this._joint    = joint
+    this._side     = side
+    this._position = position ?? null
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
@@ -125,15 +118,6 @@ export class SessionRecorder {
       // shoulder/ankle numbers are not comparable with 'perjoint1' sessions —
       // and are not recoverable, since the offset used was never stored.
       angleConvention: 'perjoint1',
-      // Head-redaction generation applied to this session's snapshots. Absent
-      // (or null) means the images were captured with the face visible.
-      //
-      // This asserts that THE REDACTION PIPELINE WAS ACTIVE for the session. It
-      // does NOT assert a face was blurred in every frame — where the head is
-      // out of shot there is nothing to blur. It is also NOT de-identification:
-      // the images stay linked to a named patient and a date of service, so they
-      // remain PHI. It reduces the severity of a leak, nothing more.
-      faceRedaction: this._faceRedaction,
       notes:         '',
       app_version:   '0.1.0',
       // Supabase Storage paths for the two overlay snapshots. Null until the

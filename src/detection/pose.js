@@ -1,5 +1,4 @@
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
-import { headRegion, headInputsFinite, anyFaceLandmarkInFrame } from '../core/headRegion.js'
 
 const WASM_CDN  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
@@ -64,32 +63,20 @@ export class PoseDetector {
   }
 
   // Drop-in replacement for ArucoDetector.detect().
-  // Takes a video element OR a canvas directly (MediaPipe's detectForVideo
-  // accepts either as a TexImageSource) — MeasureView passes the per-tick
-  // frame-buffer canvas so detection reads the same pixels the overlay and
-  // the stored snapshot do.
-  //
-  // Returns { markers, allFound, foundIds, head, headResolved }:
-  //   - markers/allFound/foundIds: joint landmarks, centers in video pixel space.
-  //   - head: { cx, cy, r } circle (video pixel space) to redact over the
-  //     patient's head, or null — see headRegion() in ../core/headRegion.js.
-  //   - headResolved: whether `head` above is trustworthy enough to capture a
-  //     snapshot from THIS frame. True only when a redaction was actually
-  //     drawn (head !== null) or it is provable that no face landmark is on
-  //     screen at all (nothing to redact). False whenever a face landmark may
-  //     be in frame but no redaction was produced for it — e.g. non-finite
-  //     landmarks, or a real head whose capped circle fell off-rect — since
-  //     capturing in that state risks storing an unredacted face. See the
-  //     `headResolved` derivation below for the full case breakdown.
+  // Takes a video element OR a canvas (MediaPipe's detectForVideo accepts
+  // either as a TexImageSource). MeasureView passes its per-tick frame-buffer
+  // canvas so detection and the stored snapshot read the same pixels — see the
+  // frame-grab comment in MeasureView._runDetection().
+  // Returns { markers, allFound, foundIds } with centers in video pixel space.
   detect(videoElement) {
     if (!this._ready || !videoElement) {
-      return { markers: {}, allFound: false, foundIds: [], head: null, headResolved: false }
+      return { markers: {}, allFound: false, foundIds: [] }
     }
 
     const result = this._landmarker.detectForVideo(videoElement, performance.now())
 
     if (!result.landmarks || result.landmarks.length === 0) {
-      return { markers: {}, allFound: false, foundIds: [], head: null, headResolved: false }
+      return { markers: {}, allFound: false, foundIds: [] }
     }
 
     const lmNorm = result.landmarks[0]
@@ -97,8 +84,7 @@ export class PoseDetector {
     // a frame — callers fall back to the 2D center when world is undefined.
     const wlm    = result.worldLandmarks?.[0] ?? null
     // videoElement may be an HTMLVideoElement (videoWidth/videoHeight) or an
-    // HTMLCanvasElement (width/height) — the frame-buffer canvas MeasureView
-    // now passes in has the latter.
+    // HTMLCanvasElement (width/height) — MeasureView passes the latter.
     const vw     = videoElement.videoWidth ?? videoElement.width
     const vh     = videoElement.videoHeight ?? videoElement.height
     const cfg    = JOINT_CONFIG[this.joint][this.side]
@@ -121,36 +107,10 @@ export class PoseDetector {
       }
     }
 
-    // Head circle for snapshot redaction. Independent of the joint roles — it
-    // is computed from the face/shoulder landmarks, not from JOINT_CONFIG, so
-    // it is present even when the measured joint is not fully visible.
-    const head = headRegion(lmNorm, vw, vh)
-
-    // Whether `head` above is trustworthy enough to capture a snapshot from.
-    // `head === null` is ambiguous by itself — it means EITHER a resolved
-    // "nothing to redact" OR an unresolved "can't tell" — for two distinct
-    // reasons:
-    //   1. Bad inputs (NaN/missing landmark) — headInputsFinite() catches this.
-    //   2. A head that IS large enough to be a real face, but whose radius got
-    //      capped by MAX_RADIUS_FRACTION, landing the clamped circle entirely
-    //      off-frame while a face landmark is still a few pixels inside the
-    //      video rect (camera held close). anyFaceLandmarkInFrame() catches
-    //      this — headInputsFinite() can't, since it only checks finiteness.
-    // So `headResolved` is true only when EITHER a head region was actually
-    // found (a redaction was drawn) OR no face landmark is on screen at all
-    // (there is nothing to redact, e.g. ankle framing where the app's own
-    // instructions put the head off-camera for the whole session — that stays
-    // capturable). It is false whenever a face landmark is in frame but no
-    // redaction was drawn for it, whatever the reason.
-    const headResolved = headInputsFinite(lmNorm)
-      && (head !== null || !anyFaceLandmarkInFrame(lmNorm, vw, vh))
-
     return {
       markers,
       allFound: allFound && Object.keys(markers).length === 3,
       foundIds: Object.keys(markers),
-      head,
-      headResolved,
     }
   }
 
