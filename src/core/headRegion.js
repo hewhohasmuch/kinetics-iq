@@ -28,7 +28,30 @@
  * NO VISIBILITY THRESHOLD IS APPLIED. Position only. A confidence threshold
  * silently no-ops in precisely the hard cases — backlit, face-down on a table,
  * occluded by a pillow — which is when a clinician most needs the guarantee to
- * hold. Over-blurring is free: the head is never the joint being measured.
+ * hold. Over-covering is free for knee/hip/elbow/ankle framing, where the head
+ * sits well clear of the joint.
+ *
+ * IT IS NOT FREE FOR SHOULDER. JOINT_CONFIG's shoulder landmarks (elbow →
+ * shoulder → hip) put the measured joint close under the chin, and the seed
+ * size needed to keep wind-blown hair contained (ELLIPSE_ACROSS/ALONG,
+ * COVERAGE_MARGIN — see below) reaches down onto the shoulder/acromion in a
+ * standing-shoulder-ROM framing: measured q=0.91 at the shoulder midpoint
+ * (inside the opaque core) and q=1.18 at the shoulder landmarks (in the
+ * feather), at current constants. Raising CRANIUM_NUDGE to push the centre
+ * away does not fix this — a swept parameter search (2026-08-08 head-occluder
+ * investigation, see CLAUDE.md's Face redaction section) found no
+ * (CRANIUM_NUDGE, ELLIPSE_ALONG) pair that clears FEATHER_EXTENT at the
+ * shoulder without either collapsing ELLIPSE_ALONG below ELLIPSE_ACROSS (a
+ * head wider than tall) or reopening the hair-coverage regression the seed
+ * raise fixed: the same mouth/chin landmarks that anchor containment sit on
+ * the shoulder side of the centre, so moving the centre away from the
+ * shoulder moves it away from them too, which grows the ellipse back toward
+ * the shoulder about as fast as the nudge moves the centre away from it.
+ * Measurement itself is unaffected — detection runs on the frame buffer
+ * before the overlay is drawn — but the stored shoulder snapshot's evidence
+ * near the acromion is reduced. This is a known, accepted limitation, not an
+ * oversight; do not "fix" it by shrinking the seed without re-verifying hair
+ * containment (E2E_DIAG=1 npm run verify:e2e, inspect the fixtures by eye).
  */
 
 // Starting values, biased to over-cover. Tune against the e2e fixture and
