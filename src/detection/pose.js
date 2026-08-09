@@ -63,17 +63,23 @@ export class PoseDetector {
   }
 
   // Drop-in replacement for ArucoDetector.detect().
-  // Takes a video element OR a canvas (MediaPipe's detectForVideo accepts
-  // either as a TexImageSource). MeasureView passes its per-tick frame-buffer
-  // canvas so detection and the stored snapshot read the same pixels — see the
-  // frame-grab comment in MeasureView._runDetection().
+  //
+  // `source` is any TexImageSource — a video element or a canvas; MediaPipe's
+  // detectForVideo accepts either. IN THIS APP IT IS ALWAYS A CANVAS:
+  // MeasureView passes its per-tick frame buffer so detection and the stored
+  // snapshot read the same pixels (see the frame-grab comment in
+  // MeasureView._runDetection()). Named `source` rather than `videoElement`
+  // for that reason — the old name outlived the thing it described and had to
+  // be corrected in CLAUDE.md before it misled someone into reading the live
+  // <video> here.
+  //
   // Returns { markers, allFound, foundIds } with centers in video pixel space.
-  detect(videoElement) {
-    if (!this._ready || !videoElement) {
+  detect(source) {
+    if (!this._ready || !source) {
       return { markers: {}, allFound: false, foundIds: [] }
     }
 
-    const result = this._landmarker.detectForVideo(videoElement, performance.now())
+    const result = this._landmarker.detectForVideo(source, performance.now())
 
     if (!result.landmarks || result.landmarks.length === 0) {
       return { markers: {}, allFound: false, foundIds: [] }
@@ -83,10 +89,10 @@ export class PoseDetector {
     // Metric 3D landmarks (meters, relative to hip midpoint). May be absent for
     // a frame — callers fall back to the 2D center when world is undefined.
     const wlm    = result.worldLandmarks?.[0] ?? null
-    // videoElement may be an HTMLVideoElement (videoWidth/videoHeight) or an
-    // HTMLCanvasElement (width/height) — MeasureView passes the latter.
-    const vw     = videoElement.videoWidth ?? videoElement.width
-    const vh     = videoElement.videoHeight ?? videoElement.height
+    // An HTMLVideoElement exposes videoWidth/videoHeight; a canvas exposes
+    // width/height. MeasureView passes the latter.
+    const vw     = source.videoWidth ?? source.width
+    const vh     = source.videoHeight ?? source.height
     const cfg    = JOINT_CONFIG[this.joint][this.side]
 
     const markers = {}
