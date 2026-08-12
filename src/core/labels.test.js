@@ -19,6 +19,9 @@ import {
   motionLabel,
   extremeLabels,
   romArc,
+  formatSessionDate,
+  formatSessionTime,
+  formatDuration,
 } from './labels.js'
 
 describe('splitJoint', () => {
@@ -168,6 +171,73 @@ describe('romArc', () => {
 
   it('keeps a negative minimum visible', () => {
     expect(romArc(-4, 130)).toBe('-4° – 130°')
+  })
+
+})
+
+/**
+ * The three formatters used to live privately in HistoryView and
+ * SessionDetailView — verbatim copies differing only in the weekday. report.js
+ * needs all three, which would have made a third copy of the same intent.
+ *
+ * en-US time formatting puts a narrow no-break space (U+202F) before the
+ * meridiem on modern ICU, so the tests normalise whitespace rather than pinning
+ * a character that is an ICU detail, not a clinical claim.
+ */
+const flattenSpace = (s) => s.replace(/[  ]/g, ' ')
+
+describe('formatSessionDate', () => {
+
+  // Byte-identical to HistoryView._formatDate, which omitted the weekday.
+  it('formats a YYYY-MM-DD date without a weekday by default', () => {
+    expect(formatSessionDate('2026-08-12')).toBe('Aug 12')
+  })
+
+  // Byte-identical to SessionDetailView._formatDate, which included it.
+  it('adds the weekday on request', () => {
+    expect(formatSessionDate('2026-08-12', { weekday: true })).toBe('Wed, Aug 12')
+  })
+
+  // A note pasted into a chart outlives the session list it came from.
+  it('adds the year on request', () => {
+    expect(formatSessionDate('2026-08-12', { weekday: true, year: true }))
+      .toBe('Wed, Aug 12, 2026')
+  })
+
+  it('reads the date as local, not UTC', () => {
+    // Constructed from the parts, so a timezone behind UTC cannot roll it back
+    // to the 11th the way Date.parse('2026-08-12') would.
+    expect(formatSessionDate('2026-01-01')).toBe('Jan 1')
+  })
+
+})
+
+describe('formatSessionTime', () => {
+
+  it('formats a timestamp as a 12-hour local time', () => {
+    const ts = new Date(2026, 7, 12, 15, 42).getTime()
+    expect(flattenSpace(formatSessionTime(ts))).toBe('3:42 PM')
+  })
+
+  it('pads the minute', () => {
+    const ts = new Date(2026, 7, 12, 9, 5).getTime()
+    expect(flattenSpace(formatSessionTime(ts))).toBe('9:05 AM')
+  })
+
+})
+
+describe('formatDuration', () => {
+
+  it('leaves a sub-minute duration in seconds', () => {
+    expect(formatDuration(42)).toBe('42s')
+  })
+
+  it('splits a longer duration into minutes and seconds', () => {
+    expect(formatDuration(64)).toBe('1m 4s')
+  })
+
+  it('keeps the seconds component at an exact minute', () => {
+    expect(formatDuration(120)).toBe('2m 0s')
   })
 
 })

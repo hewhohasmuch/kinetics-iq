@@ -161,3 +161,55 @@ export function extremeLabels(joint, min) {
 export function romArc(min, max) {
   return `${min}° – ${max}°`
 }
+
+// ─── Date, time and duration ──────────────────────────────────────────────
+//
+// These three lived privately in HistoryView and SessionDetailView as verbatim
+// copies, differing only in whether the date carried a weekday. report.js needs
+// all three, which would have made a third copy — the same drift this module
+// exists to prevent. Moved here unchanged; both original call sites must still
+// produce byte-identical output.
+
+/**
+ * "Aug 12" / "Tue, Aug 12" / "Tue, Aug 12, 2026" from a 'YYYY-MM-DD' date.
+ *
+ * The parts are split and fed to the Date constructor rather than parsed:
+ * `new Date('2026-08-12')` is UTC midnight, which renders as the 11th anywhere
+ * west of Greenwich, and a session's date is a local calendar day.
+ *
+ * @param {string} dateStr - 'YYYY-MM-DD' as stored on a session
+ * @param {{weekday?: boolean, year?: boolean}} [opts]
+ * @returns {string}
+ */
+export function formatSessionDate(dateStr, { weekday = false, year = false } = {}) {
+  const [y, m, d] = String(dateStr).split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
+    ...(weekday ? { weekday: 'short' } : {}),
+    month: 'short',
+    day:   'numeric',
+    ...(year ? { year: 'numeric' } : {}),
+  })
+}
+
+/**
+ * "3:42 PM" from an epoch-millisecond timestamp, in the device's timezone.
+ *
+ * @param {number} timestamp
+ * @returns {string}
+ */
+export function formatSessionTime(timestamp) {
+  return new Date(timestamp).toLocaleTimeString('en-US', {
+    hour: 'numeric', minute: '2-digit', hour12: true
+  })
+}
+
+/**
+ * "42s" / "1m 4s" — a recording length, not a clock time.
+ *
+ * @param {number} seconds
+ * @returns {string}
+ */
+export function formatDuration(seconds) {
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}

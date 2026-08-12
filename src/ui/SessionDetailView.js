@@ -20,8 +20,12 @@
 
 import { deleteSession, saveSession } from '../core/storage.js'
 import { SessionRecorder } from '../core/session.js'
-import { extremeLabels, jointLabel, positionLabel, romArc, motionLabel } from '../core/labels.js'
+import {
+  extremeLabels, jointLabel, positionLabel, romArc, motionLabel,
+  formatSessionDate, formatSessionTime, formatDuration,
+} from '../core/labels.js'
 import { sessionProvenance, calibrationSummary } from '../core/provenance.js'
+import { sessionNoteText } from '../core/report.js'
 import { getImage, cacheUploaded } from '../core/imageStore.js'
 import { getClient, isConfigured } from '../core/supabase.js'
 import { Chart } from 'chart.js/auto'
@@ -40,6 +44,7 @@ export class SessionDetailView {
     this.onBack    = onBack
     this._chart    = null
     this._objectUrls = []   // blob: URLs to revoke on unmount
+    this._copyTimer  = null // "Copied ✓" label reset
   }
 
   mount() {
@@ -52,6 +57,7 @@ export class SessionDetailView {
       this._chart.destroy()
       this._chart = null
     }
+    clearTimeout(this._copyTimer)
     for (const url of this._objectUrls) URL.revokeObjectURL(url)
     this._objectUrls = []
     this.container.innerHTML = ''
@@ -72,12 +78,12 @@ export class SessionDetailView {
     document.getElementById('stat-max').textContent   = `${s.max}°`
     document.getElementById('stat-min-label').textContent = minLabel
     document.getElementById('stat-max-label').textContent = maxLabel
-    document.getElementById('stat-dur').textContent  = this._formatDuration(s.duration_s)
+    document.getElementById('stat-dur').textContent  = formatDuration(s.duration_s)
     document.getElementById('stat-samples').textContent = `${s.samples} samples`
 
     // Header date/time and joint label
     document.getElementById('detail-title').textContent =
-      `${this._formatDate(s.date)}  ${this._formatTime(s.timestamp)}`
+      `${formatSessionDate(s.date, { weekday: true })}  ${formatSessionTime(s.timestamp)}`
     const jointEl = document.getElementById('detail-joint')
     jointEl.textContent = jointLabel(s)
     const position = positionLabel(s.position)
@@ -104,6 +110,9 @@ export class SessionDetailView {
 
     document.getElementById('btn-detail-delete')
       .addEventListener('click', () => this._handleDelete())
+
+    document.getElementById('btn-copy-note')
+      .addEventListener('click', () => this._handleCopy())
 
     document.getElementById('detail-notes')
       .addEventListener('click', () => this._openNotesEditor())
@@ -386,24 +395,59 @@ export class SessionDetailView {
     this.onBack()
   }
 
-  // ─── Formatters ──────────────────────────────────────────────────────
+  // ─── Copy for note ───────────────────────────────────────────────────
 
-  _formatDate(dateStr) {
-    const [y, m, d] = dateStr.split('-').map(Number)
-    return new Date(y, m - 1, d).toLocaleDateString('en-US', {
-      weekday: 'short', month: 'short', day: 'numeric'
-    })
+  /**
+   * Put a paste-ready summary of this session on the clipboard.
+   *
+   * The app produced a full record and then stranded it on the phone: the
+   * numbers were read off this screen and retyped into the EHR, dropping the
+   * provenance stamps on the way. report.js owns the wording; this only moves
+   * it to the clipboard.
+   *
+   * SAFARI GESTURE RULE: the text is built synchronously and writeText() is the
+   * first thing the handler does. Any `await` before the write drops the
+   * user-gesture context on iOS and the write fails silently — hence the
+   * .then() chain rather than an async handler.
+   */
+  _handleCopy() {
+    const text = sessionNoteText(this.session)
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(()  => this._flashCopied())
+        .catch(() => this._showCopyFallback(text))
+      return
+    }
+    // No clipboard API at all: http:// on a LAN address, or an older iOS.
+    this._showCopyFallback(text)
   }
 
-  _formatTime(timestamp) {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: 'numeric', minute: '2-digit', hour12: true
-    })
+  _flashCopied() {
+    const btn = document.getElementById('btn-copy-note')
+    if (!btn) return
+    clearTimeout(this._copyTimer)
+    btn.textContent = 'Copied ✓'
+    btn.classList.add('copied')
+    this._copyTimer = setTimeout(() => {
+      btn.textContent = 'Copy for note'
+      btn.classList.remove('copied')
+    }, 2000)
   }
 
-  _formatDuration(seconds) {
-    if (seconds < 60) return `${seconds}s`
-    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+  /**
+   * The real failure mode on a non-secure context, not optional polish: reveal
+   * the text with its contents selected so it can be long-pressed → Copy.
+   */
+  _showCopyFallback(text) {
+    const area = document.getElementById('copy-fallback')
+    const hint = document.getElementById('copy-fallback-hint')
+    if (!area) return
+    area.value = text
+    area.style.display = 'block'
+    if (hint) hint.style.display = 'block'
+    area.focus()
+    area.setSelectionRange(0, text.length)
   }
 
   // ─── Template ─────────────────────────────────────────────────────────
@@ -442,6 +486,20 @@ export class SessionDetailView {
           <div class="stat-card">
             <div id="stat-dur"  class="stat-value">--</div>
             <div class="stat-label">Duration</div>
+          </div>
+        </div>
+
+        <!-- Copy for note. Deliberately NOT in .detail-header, which already
+             holds Delete — putting Copy next to a destructive control on a
+             phone invites a mis-tap on the one action that cannot be undone. -->
+        <div class="copy-section">
+          <button id="btn-copy-note" class="btn-copy-note">Copy for note</button>
+          <!-- Fallback for a non-secure context or an older iOS with no
+               clipboard API: show the text selected so it can be long-pressed. -->
+          <textarea id="copy-fallback" class="copy-fallback" readonly rows="9"
+                    style="display:none"></textarea>
+          <div id="copy-fallback-hint" class="copy-fallback-hint" style="display:none">
+            Clipboard unavailable — select the text above and copy.
           </div>
         </div>
 
@@ -628,6 +686,52 @@ export class SessionDetailView {
           opacity: 0.65;
           margin-top: 3px;
           font-variant-numeric: tabular-nums;
+        }
+
+        /* Copy for note — full-width secondary, well away from Delete */
+        .copy-section { padding: 12px 16px 0; }
+
+        .btn-copy-note {
+          width: 100%;
+          padding: 12px;
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 10px;
+          color: #f0f0f0;
+          font-size: 14px;
+          font-weight: 600;
+          font-family: inherit;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+
+        .btn-copy-note:active { background: #222; border-color: #444; }
+
+        .btn-copy-note.copied {
+          color: #4ade80;
+          border-color: rgba(74,222,128,0.4);
+          background: rgba(74,222,128,0.08);
+        }
+
+        .copy-fallback {
+          width: 100%;
+          box-sizing: border-box;
+          margin-top: 8px;
+          padding: 10px 12px;
+          background: #111;
+          border: 1px solid #333;
+          border-radius: 8px;
+          color: #ddd;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-size: 12px;
+          line-height: 1.5;
+          resize: vertical;
+        }
+
+        .copy-fallback-hint {
+          margin-top: 6px;
+          font-size: 12px;
+          color: #888;
         }
 
         /* Provenance chips */

@@ -30,7 +30,10 @@
  */
 
 import { loadSessions, deleteSession, getActivePatientId, getPatient } from '../core/storage.js'
-import { jointLabel, positionLabel, romArc, motionLabel } from '../core/labels.js'
+import {
+  jointLabel, positionLabel, romArc, motionLabel,
+  formatSessionDate, formatSessionTime, formatDuration,
+} from '../core/labels.js'
 import { sessionProvenance } from '../core/provenance.js'
 import { Chart } from 'chart.js/auto'
 
@@ -172,7 +175,7 @@ export class HistoryView {
       return
     }
 
-    const labels = chartData.map(s => this._formatDate(s.date))
+    const labels = chartData.map(s => formatSessionDate(s.date))
     const motion = motionLabel(chartData[0].joint)
 
     // Legacy sessions are marked, not dropped. Excluding them would quietly
@@ -296,9 +299,9 @@ export class HistoryView {
   }
 
   _sessionRow(session) {
-    const date     = this._formatDate(session.date)
-    const time     = this._formatTime(session.timestamp)
-    const duration = this._formatDuration(session.duration_s)
+    const date     = formatSessionDate(session.date)
+    const time     = formatSessionTime(session.timestamp)
+    const duration = formatDuration(session.duration_s)
     const joint    = jointLabel(session)
     const position = positionLabel(session.position)
     const prov     = sessionProvenance(session)
@@ -342,28 +345,6 @@ export class HistoryView {
     this._renderChart(sessions)
     this._renderScopeChips(sessions)
     this._renderList(sessions)
-  }
-
-  // ─── Private: formatters ─────────────────────────────────────────────
-
-  _formatDate(dateStr) {
-    // dateStr is 'YYYY-MM-DD'
-    const [year, month, day] = dateStr.split('-').map(Number)
-    const date = new Date(year, month - 1, day)
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-  }
-
-  _formatTime(timestamp) {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    })
-  }
-
-  _formatDuration(seconds) {
-    if (seconds < 60) return `${seconds}s`
-    return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
   }
 
   // ─── Template ────────────────────────────────────────────────────────
