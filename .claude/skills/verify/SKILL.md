@@ -26,8 +26,20 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 ## Driving the app
 
 - Seed `rom_patients` + `rom_settings` (`active_patient_id`) via `addInitScript` to boot straight into MeasureView; recording is blocked without an active patient.
+- **`addInitScript` passes exactly ONE argument** to the page function. A second one arrives as `undefined`, and `localStorage.setItem(k, JSON.stringify(undefined))` stores the *string* `"undefined"`, which surfaces far away as `migrateInlineImages failed: SyntaxError: "undefined" is not valid JSON` on boot. Pass a single object.
+- To verify anything downstream of a recording (History, SessionDetail), **seed `rom_sessions` directly and skip the camera** — it turns a multi-minute run into a few seconds. Sessions need `id` (a real UUID; `sess_*` ids are treated as legacy and stay local-only), `patient_id`, `date` `'YYYY-MM-DD'`, `timestamp`, `min`/`max`/`rom`, `samples`, `duration_s`, `angleTimeline`, `updated_at`. Omit `angleConvention`/`angleFilter` to make one legacy, or set `calibrated`/`calibrationOffset` to exercise the provenance chips.
 - Key ids: `#btn-start-camera`, `#angle-display` (readout, `--°` until pose found), `#btn-calibrate` (Set Zero, ~2s sampling), `#btn-record-start/stop`, `#btn-notes-skip`, `#btn-history`, `.session-row`, `#btn-signout`, `#btn-new-patient`, `#pf-name`, `.form-save`, login: `#login-email/password/submit`.
+- `#btn-history` sits in the controls row, which is **hidden until the camera starts** — Playwright's `click()` waits for visibility and times out. When skipping the camera, wait for `state: 'attached'` and click it through `page.evaluate(() => document.getElementById('btn-history').click())`.
 - Model + first detection takes 30–90s headless; wait on `#angle-display` matching `/^-?\d+°$/` with a generous timeout. The `-?` is required — once Set Zero has been tapped, anything past the zero point in the extension direction renders negative.
 - `#btn-calibrate` sampling ends on its own after 20 detection frames, which headless (~2Hz) stretches to ~10–20s. Wait for its label to return to `Set Zero` rather than a fixed timeout, then read `#cal-status`.
 - SessionDetail's Chart.js has a 400ms entry animation — screenshot too early and the timeline line renders near zero; wait ~1s after the view mounts.
 - The overlay angle label is canvas-drawn; assert it by screenshotting and reading the image, not via DOM.
+
+## "Copy for note" (SessionDetail export)
+
+`verify:e2e` never opens this control and `src/ui/` has no unit tests, so the button — `report.test.js` covers only the text it copies — is verified by driving it. Ids: `#btn-copy-note`, `#copy-fallback` (textarea), `#copy-fallback-hint`.
+
+- Grant `permissions: ['clipboard-read', 'clipboard-write']` on the context, then read the result back with `page.evaluate(() => navigator.clipboard.readText())`. The dev server is HTTPS, so the API is available.
+- The label swap to `Copied ✓` happens in a `.then()`, so an immediate `textContent` read races it and can still see `Copy for note`. Wait ~200-300ms. It resets after 2s.
+- **Exercise the fallback**, which is the real behaviour on a `http://` LAN address or older iOS, not an edge case: `Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })` inside the `addInitScript`, then assert `#copy-fallback` is visible and fully selected (`selectionEnd - selectionStart === value.length`).
+- Worth covering both a current session and one with no `angleConvention` — the legacy one must carry the `⚠` line, and a session with `position: null` must produce no dangling `—` in the heading.
