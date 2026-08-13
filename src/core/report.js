@@ -1,8 +1,14 @@
 /**
  * report.js
  *
- * Turns a saved session into a block of text a clinician can paste into the
- * EHR note.
+ * Turns a saved session into the words a clinician hands to the EHR — as a
+ * structured model (sessionReportModel) and as the paste-ready plain text built
+ * from it (sessionNoteText).
+ *
+ * THE MODEL IS THE POINT. There are two renderings of a session now, the
+ * clipboard note and the exported PDF (pdf.js), and a second one composing its
+ * own strings would be free to disagree with the first about the same
+ * measurement. Both read the model; neither formats a clinical value itself.
  *
  * WHY THIS MODULE EXISTS:
  * The app produced a rich record — signed extremes, the ROM arc, position,
@@ -46,51 +52,106 @@ import {
 } from './labels.js'
 import { sessionProvenance, calibrationSummary } from './provenance.js'
 
+/** The trailing attribution, shared by every rendering of a session. */
+export const ATTRIBUTION = 'Measured with KineticsIQ'
+
+/**
+ * The composed clinical strings for one session, as fields.
+ *
+ * WHY A MODEL AND NOT JUST THE TEXT:
+ * There are now two renderings of a session — the clipboard note and the
+ * exported PDF — and they must never disagree about the same measurement. That
+ * is the same "one value, everywhere" rule the capture path follows for the
+ * readout, the overlay, the burned-in snapshot label and the recorder. Both
+ * renderings read this model; neither composes a clinical string of its own.
+ *
+ * The fields are already-formatted strings, not raw numbers, because the
+ * formatting IS the clinical claim: `romArc` leads with the arc rather than the
+ * subtraction, and `extremeLabels` decides whether a value is captioned "Peak
+ * extension" or "Min flexion" — which are claims about different motions.
+ *
+ * @param {Session} session
+ * @returns {{
+ *   heading: string, dateLine: string, romLine: string,
+ *   maxLabel: string, maxValue: string, minLabel: string, minValue: string,
+ *   durationLine: string, calibrationLine: string,
+ *   warning: {level: string, label: string, tail: string}|null,
+ *   notes: string|null, attribution: string,
+ * }}
+ */
+export function sessionReportModel(session) {
+  const s = session ?? {}
+
+  // A null position is dropped with its separator — the recorder leaves an
+  // unchosen position absent rather than inventing one, and a dangling em dash
+  // would read as a missing word rather than an absent field.
+  const position = positionLabel(s.position)
+
+  // Named per joint and per side of zero, from the same helper the stat cards
+  // and snapshot captions use. Values stay signed.
+  const { maxLabel, minLabel } = extremeLabels(s.joint, s.min)
+
+  const prov  = sessionProvenance(s)
+  const notes = String(s.notes ?? '').trim()
+
+  return {
+    heading:  position ? `${jointLabel(s)} — ${position}` : jointLabel(s),
+    dateLine: `${formatSessionDate(s.date, { weekday: true, year: true })} ${formatSessionTime(s.timestamp)}`,
+
+    // The arc is the finding; the total is secondary. A knee lacking 5° of
+    // extension and one with full extension subtract to the same total.
+    romLine: `ROM ${romArc(s.min, s.max)} (${s.rom}° total)`,
+
+    maxLabel,
+    maxValue: `${s.max}°`,
+    minLabel,
+    minValue: `${s.min}°`,
+
+    durationLine: `Duration ${formatDuration(s.duration_s)}, ${s.samples} samples`,
+
+    // Always present, including the "not recorded" case: a report that silently
+    // omits whether this was a raw or a zeroed measurement is claiming neither.
+    calibrationLine: calibrationSummary(s).text,
+
+    // The most important field when it is not null. Carries no glyph and no
+    // markup — each rendering marks it in whatever way its medium supports.
+    warning: prov.level !== 'ok'
+      ? { level: prov.level, label: prov.label, tail: warningTail(prov.level) }
+      : null,
+
+    notes: notes || null,
+    attribution: ATTRIBUTION,
+  }
+}
+
 /**
  * Build the paste-ready summary of one session.
+ *
+ * A plain-text rendering of sessionReportModel() and nothing more — every
+ * clinical string above is composed there so this and the PDF cannot drift.
  *
  * @param {Session} session
  * @returns {string} newline-separated plain text
  */
 export function sessionNoteText(session) {
-  const s = session ?? {}
-  const lines = []
+  const m = sessionReportModel(session)
+  const lines = [
+    m.heading,
+    m.dateLine,
+    m.romLine,
+    `${m.maxLabel} ${m.maxValue}`,
+    `${m.minLabel} ${m.minValue}`,
+    m.durationLine,
+    m.calibrationLine,
+  ]
 
-  // Heading. A null position is dropped with its separator — the recorder
-  // leaves an unchosen position absent rather than inventing one, and a
-  // dangling em dash would read as a missing word rather than an absent field.
-  const position = positionLabel(s.position)
-  lines.push(position ? `${jointLabel(s)} — ${position}` : jointLabel(s))
+  // Prefixed with a glyph rather than any markup, so it survives a paste into a
+  // plain-text note field. (The PDF cannot use this character — see pdf.js.)
+  if (m.warning) lines.push(`⚠ ${m.warning.label} — ${m.warning.tail}`)
 
-  lines.push(`${formatSessionDate(s.date, { weekday: true, year: true })} ${formatSessionTime(s.timestamp)}`)
+  if (m.notes) lines.push(`Note: ${m.notes}`)
 
-  // The arc is the finding; the total is secondary. A knee lacking 5° of
-  // extension and one with full extension subtract to the same total.
-  lines.push(`ROM ${romArc(s.min, s.max)} (${s.rom}° total)`)
-
-  // Named per joint and per side of zero, from the same helper the stat cards
-  // and snapshot captions use. Values stay signed.
-  const { maxLabel, minLabel } = extremeLabels(s.joint, s.min)
-  lines.push(`${maxLabel} ${s.max}°`)
-  lines.push(`${minLabel} ${s.min}°`)
-
-  lines.push(`Duration ${formatDuration(s.duration_s)}, ${s.samples} samples`)
-
-  // Always emitted, including the "not recorded" case: a note that silently
-  // omits whether this was a raw or a zeroed measurement is claiming neither.
-  lines.push(calibrationSummary(s).text)
-
-  // The most important line when it appears. Prefixed with a glyph rather than
-  // any markup, so it survives a paste into a plain-text note field.
-  const prov = sessionProvenance(s)
-  if (prov.level !== 'ok') {
-    lines.push(`⚠ ${prov.label} — ${warningTail(prov.level)}`)
-  }
-
-  const notes = String(s.notes ?? '').trim()
-  if (notes) lines.push(`Note: ${notes}`)
-
-  lines.push('Measured with KineticsIQ')
+  lines.push(m.attribution)
 
   return lines.join('\n')
 }
