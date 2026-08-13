@@ -234,8 +234,12 @@ describe('buildSessionPdf — multiple sessions', () => {
 
 describe('buildSessionPdf — PHI', () => {
 
-  // Same reasoning as report.test.js, extended to the filename: a PDF is more
-  // detachable than a paste, so it must not name anyone either.
+  // THIS IS THE LOAD-BEARING ONE. The filename now carries initials by
+  // arrangement (see the filename suite below), so the document is the only
+  // place the no-identifier rule still holds absolutely — and it is the part
+  // that ends up permanently in a chart. buildSessionPdf is never handed a
+  // patient record at all, which is what makes this structural rather than a
+  // matter of remembering.
   it('carries no patient identifier anywhere in the document', async () => {
     const s = makeSession({
       patient_id:   'b0b0b0b0-0000-4000-8000-000000000000',
@@ -254,15 +258,60 @@ describe('buildSessionPdf — PHI', () => {
     expect(text).not.toContain('b0b0b0b0')
   })
 
-  it('keeps identifiers out of the filename too', async () => {
-    const name = pdfFilename([makeSession({ patientName: 'Jane Q. Patient', mrn: 'MRN-88213' })])
-    expect(name).not.toMatch(/jane|patient|mrn/i)
-    expect(name).toBe('kineticsiq-right-knee-2026-08-12.pdf')
+})
+
+// ─── The filename ──────────────────────────────────────────────────────────
+//
+// This suite REVERSES an earlier rule on purpose, so it says why. The original
+// export carried no identifier at all, inherited from the clipboard note where
+// the clinician is already inside the chart when they paste. A file is not so
+// lucky — it travels phone → Files → cloud → desktop → EHR upload identified by
+// nothing but its name, and two right-knee sessions on one day produced
+// BYTE-IDENTICAL filenames. The risk there is mis-filing, not exposure, and
+// mis-filing PHI into the wrong chart is the worse incident.
+//
+// So: a timestamp always, and initials when the caller asks for them. Both live
+// only in the name. The document itself is still pinned identifier-free above.
+
+describe('pdfFilename — telling two exports apart', () => {
+
+  it('distinguishes two same-day sessions of the same joint by time', () => {
+    const morning = pdfFilename([makeSession({ timestamp: new Date(2026, 7, 12, 9, 14).getTime() })])
+    const later   = pdfFilename([makeSession({ timestamp: new Date(2026, 7, 12, 14, 42).getTime() })])
+    expect(morning).not.toBe(later)
+    expect(morning).toContain('0914')
+    expect(later).toContain('1442')
   })
 
-  it('names a multi-session export by count and date, not by patient', async () => {
+  it('uses the session\'s time, not the export time, so re-exporting is stable', () => {
+    const s = makeSession()
+    expect(pdfFilename([s])).toBe(pdfFilename([s]))
+    expect(pdfFilename([s])).toBe('kineticsiq-right-knee-2026-08-12-1542.pdf')
+  })
+
+  it('omits the initials segment entirely when none are given', () => {
+    expect(pdfFilename([makeSession()])).toBe('kineticsiq-right-knee-2026-08-12-1542.pdf')
+  })
+
+  it('includes initials when the caller asks for them', () => {
+    expect(pdfFilename([makeSession()], { initials: 'JP' }))
+      .toBe('kineticsiq-jp-right-knee-2026-08-12-1542.pdf')
+  })
+
+  it('never carries a full name, DOB or MRN — initials are the most it will take', () => {
+    const s = makeSession({ patientName: 'Jane Q. Patient', dob: '1979-03-02', mrn: 'MRN-88213' })
+    const name = pdfFilename([s], { initials: 'JP' })
+    expect(name).not.toMatch(/jane|patient|1979|88213/i)
+  })
+
+  it('names a multi-session export by count and date', () => {
     const name = pdfFilename([makeSession({ id: 'a' }), makeSession({ id: 'b' })])
-    expect(name).toMatch(/^kineticsiq-2-sessions-\d{4}-\d{2}-\d{2}\.pdf$/)
+    expect(name).toMatch(/^kineticsiq-2-sessions-\d{4}-\d{2}-\d{2}-\d{4}\.pdf$/)
+  })
+
+  it('carries initials on a multi-session export too', () => {
+    const name = pdfFilename([makeSession({ id: 'a' }), makeSession({ id: 'b' })], { initials: 'JP' })
+    expect(name).toMatch(/^kineticsiq-jp-2-sessions-/)
   })
 })
 

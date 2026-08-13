@@ -129,10 +129,20 @@ export class HistoryView {
     if (chosen.length === 0) return
 
     btn.disabled = true
-    btn.textContent = 'Preparing…'
     try {
-      const { missingImages } = await exportSessionsAsPdf(chosen)
-      btn.textContent = missingImages > 0 ? 'Saved — photos missing' : 'Saved ✓'
+      const result = await exportSessionsAsPdf(chosen, {
+        onStart: () => { btn.textContent = 'Preparing…' },
+      })
+
+      // Cancelled: stay in select mode with the selection intact, so a
+      // mis-tap on Export costs nothing and the choices are not lost.
+      if (!result) {
+        btn.disabled = false
+        this._updateSelectionBar()
+        return
+      }
+
+      btn.textContent = result.missingImages > 0 ? 'Saved — photos missing' : 'Saved ✓'
       setTimeout(() => this._toggleSelectMode(false), 1500)
     } catch (e) {
       console.error('PDF export failed:', e)

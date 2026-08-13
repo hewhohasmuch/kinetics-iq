@@ -48,6 +48,9 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 
 Ids: `#btn-export-pdf`, `#btn-share-pdf`, `#btn-select-mode`, `#selection-bar`, `#selection-count`, `#btn-export-selected`, `#btn-select-cancel`, `.session-row .row-check`.
 
+**Every export goes through a confirmation sheet first** — `.export-confirm` (backdrop), `.ec-patient`, `.ec-what`, `#ec-filename` (live preview), `#ec-initials` (checkbox), `#ec-cancel`, `#ec-confirm`. Clicking `#btn-export-pdf` no longer downloads anything on its own; wait for `.export-confirm` then click `#ec-confirm`. Worth pinning that Cancel fires **no** download (attach a `page.on('download')` spy and assert it stayed false) and that the `#ec-initials` choice persists into the next export — it saves to `rom_settings` on change, not on confirm.
+- Seed the patient with a `dob` and `mrn` so the export can be asserted to leak neither into the file nor its name.
+
 - Use `acceptDownloads: true` on the context and `page.waitForEvent('download')` *before* clicking; `download.saveAs(path)` then `suggestedFilename()` (which must contain no patient identifier).
 - **Seed IndexedDB blobs in `addInitScript`** or every export takes the placeholder path: db `kinetics_images`, store `images` (keyPath `key`, indexes `uploaded`/`capturedAt`), record `{key: '<sessionId>:peak'|':min', sessionId, which, blob, uploaded, capturedAt, bytes}`. Seeding only *some* sessions is useful — it exercises "Saved — photos missing" alongside the normal path.
 - Assert the bytes, not just that a file arrived: `%PDF-` header, `/Type /Page` count = session count, `/Subtype /Image` present, and **zero** `(\376\377` matches (a UTF-16 string means the WinAnsi trap fired — see CLAUDE.md).

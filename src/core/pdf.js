@@ -17,11 +17,21 @@
  * and the document cannot disagree about the same measurement. This module owns
  * layout — where a line sits on the page — and nothing about what it says.
  *
- * NO PATIENT IDENTIFIER, IN THE DOCUMENT OR THE FILENAME. report.js omits name,
- * DOB and MRN because the clipboard is a promiscuous surface; a file is more
- * detachable still — it sits in Files, it can be mailed — so the same rule
- * holds, and pdf.test.js pins it. The filename carries joint, side and date,
- * which is enough to tell two exports apart without naming anyone.
+ * NO PATIENT IDENTIFIER IN THE DOCUMENT. report.js omits name, DOB and MRN
+ * because the clipboard is a promiscuous surface, and a page filed into a chart
+ * is permanent, so nothing here ever prints one. `buildSessionPdf` is never
+ * given a patient record at all — see pdfFilename below.
+ *
+ * THE FILENAME IS THE EXCEPTION, AND DELIBERATELY SO. The original rule was
+ * inherited from the clipboard, where the clinician is already inside the chart
+ * when they paste. A file is not so lucky: it travels phone → Files → cloud →
+ * desktop → EHR upload, and at every step nothing said who it belonged to — two
+ * right-knee sessions exported the same day produced byte-identical filenames.
+ * The risk there is not exposure but MIS-FILING, which is its own incident and
+ * the worse of the two. So the filename carries a timestamp always, and the
+ * patient's INITIALS when the clinician leaves the setting on. Both live only
+ * in the name, so the identifier exists exactly during the transit window and
+ * is gone once the EHR files the document under its own naming.
  *
  * ── THE ENCODING TRAP ────────────────────────────────────────────────────
  * jsPDF's built-in Helvetica is WinAnsi-encoded. `°` (0xB0) and the en dash
@@ -89,21 +99,50 @@ export function winAnsi(s) {
 }
 
 /**
- * A filename for one or more sessions. No patient identifier — see the header.
+ * A filename for one or more sessions.
+ *
+ * `initials` is an already-derived STRING, never a patient record — this module
+ * is deliberately incapable of learning a patient's name, which is what makes
+ * "no identifier in the document" a property of the module boundary rather than
+ * of anyone's discipline. Callers derive it with `patientInitials()` and pass it
+ * only when the clinician has left the setting on. See exportPdf.js.
+ *
+ * The TIME matters as much as the initials. Two sessions of the same joint on
+ * the same day used to produce byte-identical filenames, which is the worst
+ * possible property for a file about to be filed into a chart. For a single
+ * session the time is the SESSION's, not the export's: it is what distinguishes
+ * two measurements, and it makes re-exporting the same session idempotent.
  *
  * @param {Session[]} sessions
+ * @param {{initials?: string}} [opts]
  * @returns {string}
  */
-export function pdfFilename(sessions) {
+export function pdfFilename(sessions, { initials = '' } = {}) {
   const list = sessions ?? []
+  const who  = initials ? `${slug(initials)}-` : ''
+
   if (list.length === 1) {
     const s = list[0]
-    const slug = jointLabel(s).toLowerCase().replace(/[^a-z0-9]+/g, '-')
-    return `kineticsiq-${slug}-${s.date}.pdf`
+    return `kineticsiq-${who}${slug(jointLabel(s))}-${s.date}-${hhmm(s.timestamp)}.pdf`
   }
-  const today = new Date()
-  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-  return `kineticsiq-${list.length}-sessions-${iso}.pdf`
+
+  const now = new Date()
+  return `kineticsiq-${who}${list.length}-sessions-${ymd(now)}-${hhmm(now.getTime())}.pdf`
+}
+
+const pad = (n) => String(n).padStart(2, '0')
+
+function slug(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+function ymd(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+function hhmm(timestamp) {
+  const d = new Date(timestamp ?? Date.now())
+  return `${pad(d.getHours())}${pad(d.getMinutes())}`
 }
 
 /**
@@ -332,6 +371,5 @@ function setInk(doc, rgb) {
 }
 
 function todayIso() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return ymd(new Date())
 }
