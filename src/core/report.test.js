@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { sessionNoteText } from './report.js'
+import { sessionNoteText, sessionReportModel } from './report.js'
 
 /** A current, well-provenanced session. Override per test. */
 function makeSession(overrides = {}) {
@@ -206,6 +206,46 @@ describe('sessionNoteText — PHI', () => {
     expect(text).not.toContain('1981-04-02')
     expect(text).not.toContain('MRN-99871')
     expect(text).not.toContain('a1b2c3d4')
+  })
+
+})
+
+describe('sessionReportModel — the shared source of both renderings', () => {
+
+  // The model exists so the clipboard note and the exported PDF cannot drift
+  // into stating different things about the same measurement. If a field ever
+  // stops reaching the note, one of the two surfaces has started composing its
+  // own clinical string — which is exactly what this prevents.
+  it('puts every field it produces into the note text', () => {
+    const s = makeSession({ notes: 'day 14 post-op, after warm-up' })
+    const m = sessionReportModel(s)
+    const text = sessionNoteText(s)
+
+    for (const field of [
+      m.heading, m.dateLine, m.romLine, m.maxLabel, m.maxValue,
+      m.minLabel, m.minValue, m.durationLine, m.calibrationLine,
+      m.notes, m.attribution,
+    ]) {
+      expect(text).toContain(field)
+    }
+  })
+
+  it('carries the warning as data, leaving each medium to mark it', () => {
+    // The note prefixes a ⚠; the PDF draws a band, because its base font has
+    // no such glyph. Neither claim belongs in the model.
+    const m = sessionReportModel(makeSession({ angleConvention: undefined }))
+    expect(m.warning).toMatchObject({ level: 'convention', label: 'Legacy scale' })
+    expect(m.warning.tail).not.toContain('⚠')
+  })
+
+  it('reports no warning for a fully stamped session', () => {
+    expect(sessionReportModel(makeSession()).warning).toBeNull()
+  })
+
+  it('leaves absent notes and position as null rather than empty strings', () => {
+    const m = sessionReportModel(makeSession({ notes: '   ', position: null }))
+    expect(m.notes).toBeNull()
+    expect(m.heading).toBe('Right Knee')      // no dangling separator
   })
 
 })

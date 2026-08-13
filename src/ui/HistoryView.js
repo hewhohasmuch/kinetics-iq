@@ -35,6 +35,7 @@ import {
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
 import { sessionProvenance } from '../core/provenance.js'
+import { exportSessionsAsPdf } from './exportPdf.js'
 import { Chart } from 'chart.js/auto'
 
 export class HistoryView {
@@ -49,6 +50,8 @@ export class HistoryView {
     this.onShowDetail   = onShowDetail
     this._chart         = null
     this._scope         = null   // { joint, side } the chart is currently showing
+    this._selectMode    = false  // rows pick instead of navigate
+    this._selected      = new Set()
   }
 
   mount() {
@@ -80,6 +83,62 @@ export class HistoryView {
 
     document.getElementById('btn-back')
       .addEventListener('click', () => this.onBack())
+
+    document.getElementById('btn-select-mode')
+      .addEventListener('click', () => this._toggleSelectMode())
+    document.getElementById('btn-export-selected')
+      .addEventListener('click', () => this._exportSelected())
+    document.getElementById('btn-select-cancel')
+      .addEventListener('click', () => this._toggleSelectMode(false))
+  }
+
+  // ─── Multi-session export ───────────────────────────────────────────
+  //
+  // The list is deliberately unfiltered by joint (unlike the chart above it),
+  // so a selection may legitimately span joints and sides — the PDF gives each
+  // session its own page and does not try to relate them.
+
+  _toggleSelectMode(next = !this._selectMode) {
+    this._selectMode = next
+    this._selected.clear()
+    this.container.querySelector('.history-view').classList.toggle('selecting', next)
+    document.getElementById('btn-select-mode').textContent = next ? 'Done' : 'Select'
+    this._renderList(this._loadScopedSessions())
+    this._updateSelectionBar()
+  }
+
+  _updateSelectionBar() {
+    const bar = document.getElementById('selection-bar')
+    if (!bar) return
+    bar.style.display = this._selectMode ? 'flex' : 'none'
+
+    const n   = this._selected.size
+    const btn = document.getElementById('btn-export-selected')
+    document.getElementById('selection-count').textContent =
+      n === 0 ? 'Select sessions' : `${n} selected`
+    btn.disabled = n === 0
+    btn.textContent = 'Export PDF'
+  }
+
+  async _exportSelected() {
+    const btn = document.getElementById('btn-export-selected')
+    if (!btn || btn.disabled) return
+
+    // Read from the store rather than the DOM, and keep the store's order.
+    const chosen = this._loadScopedSessions().filter(s => this._selected.has(s.id))
+    if (chosen.length === 0) return
+
+    btn.disabled = true
+    btn.textContent = 'Preparing…'
+    try {
+      const { missingImages } = await exportSessionsAsPdf(chosen)
+      btn.textContent = missingImages > 0 ? 'Saved — photos missing' : 'Saved ✓'
+      setTimeout(() => this._toggleSelectMode(false), 1500)
+    } catch (e) {
+      console.error('PDF export failed:', e)
+      btn.textContent = 'Export failed'
+      btn.disabled = false
+    }
   }
 
   /**
@@ -277,13 +336,22 @@ export class HistoryView {
 
     listEl.innerHTML = sessions.map(s => this._sessionRow(s)).join('')
 
-    // Bind delete buttons
-    // Tap row to open detail
+    // In select mode a row toggles instead of navigating.
     listEl.querySelectorAll('.session-row').forEach(row => {
       row.addEventListener('click', (e) => {
+        const id = row.dataset.id
+
+        if (this._selectMode) {
+          if (this._selected.has(id)) this._selected.delete(id)
+          else                        this._selected.add(id)
+          row.classList.toggle('selected', this._selected.has(id))
+          row.querySelector('.row-check').textContent = this._selected.has(id) ? '✓' : ''
+          this._updateSelectionBar()
+          return
+        }
+
         // Don't trigger if delete button was tapped
         if (e.target.closest('.btn-delete')) return
-        const id      = row.dataset.id
         const session = this._loadScopedSessions().find(s => s.id === id)
         if (session && this.onShowDetail) this.onShowDetail(session)
       })
@@ -318,8 +386,11 @@ export class HistoryView {
       ? `<span class="legacy-badge" title="${prov.reason}">⚠ ${prov.label}</span>`
       : ''
 
+    const selected = this._selected.has(session.id)
+
     return `
-      <div class="session-row" data-id="${session.id}">
+      <div class="session-row${selected ? ' selected' : ''}" data-id="${session.id}">
+        <div class="row-check">${selected ? '✓' : ''}</div>
         <div class="session-info">
           <div class="session-date">${date} <span class="session-time">${time}</span></div>
           <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${positionBadge}${legacyBadge}</div>
@@ -356,6 +427,7 @@ export class HistoryView {
         <div class="history-header">
           <button id="btn-back" class="btn-ghost btn-back">← Back</button>
           <h1 class="history-title">History</h1>
+          <button id="btn-select-mode" class="btn-select-mode">Select</button>
         </div>
 
         <div id="scope-chips" class="scope-chips"></div>
@@ -370,6 +442,14 @@ export class HistoryView {
         </div>
 
         <div id="session-list" class="session-list"></div>
+
+        <!-- Only visible in select mode. Sits at the bottom, away from the
+             per-row delete controls that select mode hides. -->
+        <div id="selection-bar" class="selection-bar" style="display:none">
+          <button id="btn-select-cancel" class="btn-ghost btn-select-cancel">Cancel</button>
+          <span id="selection-count" class="selection-count">Select sessions</span>
+          <button id="btn-export-selected" class="btn-export-selected" disabled>Export PDF</button>
+        </div>
 
       </div>
 
@@ -396,7 +476,87 @@ export class HistoryView {
           font-size: 18px;
           font-weight: 600;
           color: #f0f0f0;
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
+
+        .btn-select-mode {
+          background: none;
+          border: 1px solid #333;
+          border-radius: 8px;
+          color: #ccc;
+          font-family: inherit;
+          font-size: 13px;
+          font-weight: 500;
+          padding: 7px 12px;
+          flex-shrink: 0;
+        }
+
+        .btn-select-mode:active { background: #1a1a1a; }
+
+        /* Select mode hides the per-row delete: a checkbox row sitting next to
+           a live delete control invites the one mis-tap that cannot be undone. */
+        .selecting .btn-delete,
+        .selecting .row-chevron { display: none; }
+
+        .row-check { display: none; }
+
+        .selecting .row-check {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 22px;
+          height: 22px;
+          border: 1px solid #444;
+          border-radius: 50%;
+          color: #0a0a0a;
+          font-size: 13px;
+          font-weight: 700;
+          flex-shrink: 0;
+        }
+
+        .selecting .session-row.selected .row-check {
+          background: #4ade80;
+          border-color: #4ade80;
+        }
+
+        .selecting .session-row.selected { background: rgba(74,222,128,0.07); }
+
+        .selection-bar {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px 16px;
+          padding-bottom: calc(12px + env(safe-area-inset-bottom));
+          background: #111;
+          border-top: 1px solid #222;
+          flex-shrink: 0;
+        }
+
+        .selection-count {
+          flex: 1;
+          font-size: 13px;
+          color: #888;
+        }
+
+        .btn-export-selected {
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 10px;
+          color: #f0f0f0;
+          font-family: inherit;
+          font-size: 14px;
+          font-weight: 600;
+          padding: 10px 16px;
+          flex-shrink: 0;
+        }
+
+        .btn-export-selected:disabled { opacity: 0.45; }
+
+        .btn-select-cancel { padding: 8px 10px; font-size: 13px; flex-shrink: 0; }
 
         .btn-back {
           padding: 8px 14px;

@@ -26,11 +26,9 @@ import {
 } from '../core/labels.js'
 import { sessionProvenance, calibrationSummary } from '../core/provenance.js'
 import { sessionNoteText } from '../core/report.js'
-import { getImage, cacheUploaded } from '../core/imageStore.js'
-import { getClient, isConfigured } from '../core/supabase.js'
+import { resolveFrameBlob } from '../core/frames.js'
+import { exportSessionsAsPdf, canShareFile, shareFile } from './exportPdf.js'
 import { Chart } from 'chart.js/auto'
-
-const IMAGE_BUCKET = 'session-images'
 
 export class SessionDetailView {
   /**
@@ -45,6 +43,8 @@ export class SessionDetailView {
     this._chart    = null
     this._objectUrls = []   // blob: URLs to revoke on unmount
     this._copyTimer  = null // "Copied ✓" label reset
+    this._pdfTimer   = null // "Saved ✓" label reset
+    this._pdf        = null // last built PDF, held so Share gets its own gesture
   }
 
   mount() {
@@ -58,6 +58,8 @@ export class SessionDetailView {
       this._chart = null
     }
     clearTimeout(this._copyTimer)
+    clearTimeout(this._pdfTimer)
+    this._pdf = null
     for (const url of this._objectUrls) URL.revokeObjectURL(url)
     this._objectUrls = []
     this.container.innerHTML = ''
@@ -113,6 +115,11 @@ export class SessionDetailView {
 
     document.getElementById('btn-copy-note')
       .addEventListener('click', () => this._handleCopy())
+
+    document.getElementById('btn-export-pdf')
+      .addEventListener('click', () => this._handleExportPdf())
+    document.getElementById('btn-share-pdf')
+      .addEventListener('click', () => this._handleShare())
 
     document.getElementById('detail-notes')
       .addEventListener('click', () => this._openNotesEditor())
@@ -261,22 +268,15 @@ export class SessionDetailView {
 
   /**
    * Resolve a displayable object URL for one frame, or null if unavailable.
-   * Caches a cloud-fetched blob back into IndexedDB for next time.
+   *
+   * The IndexedDB → cloud → re-cache rule lives in frames.js because the PDF
+   * export needs exactly the same one; all this adds is the object URL and its
+   * bookkeeping for revocation on unmount.
+   *
    * @returns {Promise<string|null>}
    */
   async _resolveFrameUrl(sessionId, which, path) {
-    let blob = await getImage(sessionId, which)
-
-    if (!blob && path && isConfigured() && this._isOnline()) {
-      try {
-        const { data, error } = await getClient().storage.from(IMAGE_BUCKET).download(path)
-        if (!error && data) {
-          blob = data
-          cacheUploaded(sessionId, which, blob)   // fire-and-forget re-cache
-        }
-      } catch (_) { /* placeholder path handles it */ }
-    }
-
+    const blob = await resolveFrameBlob(sessionId, which, path)
     if (!blob) return null
     const url = URL.createObjectURL(blob)
     this._objectUrls.push(url)
@@ -288,10 +288,6 @@ export class SessionDetailView {
     if (img) { img.removeAttribute('src'); img.style.display = 'none' }
     fig.querySelector('.peak-frame-caption').textContent =
       `${caption} — image not available offline`
-  }
-
-  _isOnline() {
-    return typeof navigator === 'undefined' || navigator.onLine !== false
   }
 
   _renderChart(timeline, durationS) {
@@ -435,6 +431,53 @@ export class SessionDetailView {
     }, 2000)
   }
 
+  // ─── Export PDF ──────────────────────────────────────────────────────
+
+  /**
+   * Build a chart-ready PDF of this session and hand it to the user.
+   *
+   * Deliberately NOT modelled on _handleCopy's gesture discipline — see the
+   * header of exportPdf.js. Generation is unavoidably async, so the download
+   * goes through an anchor (which needs no gesture) and sharing is offered
+   * afterwards as its own tap.
+   */
+  async _handleExportPdf() {
+    const btn = document.getElementById('btn-export-pdf')
+    if (!btn || btn.disabled) return
+
+    const restore = btn.textContent
+    btn.disabled = true
+    btn.textContent = 'Preparing…'      // two JPEGs — not instant on a phone
+
+    try {
+      const { blob, filename, missingImages } = await exportSessionsAsPdf([this.session])
+      this._pdf = { blob, filename }
+
+      btn.textContent = missingImages > 0 ? 'Saved — photos missing' : 'Saved ✓'
+      btn.classList.add('copied')
+
+      // Share needs a live gesture of its own, so it appears as a button
+      // rather than firing from here.
+      const share = document.getElementById('btn-share-pdf')
+      if (share && canShareFile(blob, filename)) share.style.display = 'block'
+    } catch (e) {
+      console.error('PDF export failed:', e)
+      btn.textContent = 'Export failed'
+    } finally {
+      btn.disabled = false
+      clearTimeout(this._pdfTimer)
+      this._pdfTimer = setTimeout(() => {
+        btn.textContent = restore
+        btn.classList.remove('copied')
+      }, 3000)
+    }
+  }
+
+  /** Fresh user gesture — required by navigator.share() on iOS. */
+  _handleShare() {
+    if (this._pdf) shareFile(this._pdf.blob, this._pdf.filename)
+  }
+
   /**
    * The real failure mode on a non-secure context, not optional polish: reveal
    * the text with its contents selected so it can be long-pressed → Copy.
@@ -494,6 +537,14 @@ export class SessionDetailView {
              phone invites a mis-tap on the one action that cannot be undone. -->
         <div class="copy-section">
           <button id="btn-copy-note" class="btn-copy-note">Copy for note</button>
+          <!-- The document, as opposed to the note text: this is what actually
+               attaches to a chart in eCW / WebPT / Prompt, and the only path
+               the snapshots can travel by. -->
+          <button id="btn-export-pdf" class="btn-copy-note btn-export-pdf">Export PDF</button>
+          <!-- Revealed only after a PDF exists, because navigator.share() needs
+               a live user gesture and generation has already consumed one. -->
+          <button id="btn-share-pdf" class="btn-copy-note btn-share-pdf"
+                  style="display:none">Share PDF…</button>
           <!-- Fallback for a non-secure context or an older iOS with no
                clipboard API: show the text selected so it can be long-pressed. -->
           <textarea id="copy-fallback" class="copy-fallback" readonly rows="9"
@@ -706,6 +757,10 @@ export class SessionDetailView {
         }
 
         .btn-copy-note:active { background: #222; border-color: #444; }
+
+        .btn-copy-note + .btn-copy-note { margin-top: 8px; }
+
+        .btn-export-pdf:disabled { opacity: 0.6; }
 
         .btn-copy-note.copied {
           color: #4ade80;

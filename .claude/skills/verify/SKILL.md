@@ -43,3 +43,13 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 - The label swap to `Copied ✓` happens in a `.then()`, so an immediate `textContent` read races it and can still see `Copy for note`. Wait ~200-300ms. It resets after 2s.
 - **Exercise the fallback**, which is the real behaviour on a `http://` LAN address or older iOS, not an edge case: `Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })` inside the `addInitScript`, then assert `#copy-fallback` is visible and fully selected (`selectionEnd - selectionStart === value.length`).
 - Worth covering both a current session and one with no `angleConvention` — the legacy one must carry the `⚠` line, and a session with `position: null` must produce no dangling `—` in the heading.
+
+## PDF export (SessionDetail + History multi-select)
+
+Ids: `#btn-export-pdf`, `#btn-share-pdf`, `#btn-select-mode`, `#selection-bar`, `#selection-count`, `#btn-export-selected`, `#btn-select-cancel`, `.session-row .row-check`.
+
+- Use `acceptDownloads: true` on the context and `page.waitForEvent('download')` *before* clicking; `download.saveAs(path)` then `suggestedFilename()` (which must contain no patient identifier).
+- **Seed IndexedDB blobs in `addInitScript`** or every export takes the placeholder path: db `kinetics_images`, store `images` (keyPath `key`, indexes `uploaded`/`capturedAt`), record `{key: '<sessionId>:peak'|':min', sessionId, which, blob, uploaded, capturedAt, bytes}`. Seeding only *some* sessions is useful — it exercises "Saved — photos missing" alongside the normal path.
+- Assert the bytes, not just that a file arrived: `%PDF-` header, `/Type /Page` count = session count, `/Subtype /Image` present, and **zero** `(\376\377` matches (a UTF-16 string means the WinAnsi trap fired — see CLAUDE.md).
+- To *see* the layout, render with `pdfjs-dist` (`npm install --no-save pdfjs-dist`) into a canvas inside a page and screenshot it. Navigating Chromium to a `file://` PDF fails with "Download is starting" — headless has no PDF viewer. pdf.js must be served from a real origin, so `page.route('**/pdfjs/**')` fulfilled from `node_modules/pdfjs-dist/build/` after a `goto` to the dev server.
+- Dev serves deps from `/node_modules/.vite/deps/`, not `/assets/` — a response matcher written for production chunk names silently matches nothing and the assertion passes vacuously.
