@@ -99,6 +99,45 @@ export function sideLabel(side) {
 }
 
 /**
+ * "JP" — a patient's initials, for labelling an exported file in transit.
+ *
+ * WHY THIS EXISTS, GIVEN report.js GOES OUT OF ITS WAY TO OMIT IDENTIFIERS:
+ * The clipboard note needs no identifier because the clinician is already
+ * inside the patient's chart when they paste. An exported PDF is not so lucky —
+ * it travels phone → Files → cloud → desktop → EHR upload, and at every step
+ * nothing says who it belongs to. Two right-knee sessions exported on the same
+ * day used to produce the identical filename, so the risk stopped being
+ * exposure and became MIS-FILING: attaching one patient's range of motion to
+ * another's chart.
+ *
+ * Initials go in the FILENAME ONLY, never on the page, so the identifier exists
+ * exactly during that transit window and is gone once the EHR files the
+ * document under its own naming. See pdf.js and exportPdf.js.
+ *
+ * Returns '' rather than a placeholder for an absent name, so the caller drops
+ * the segment instead of emitting something meaningless like '--'.
+ *
+ * @param {string|null|undefined} name
+ * @returns {string} up to 3 uppercase letters, or ''
+ */
+export function patientInitials(name) {
+  const tokens = String(name ?? '')
+    .split(/[\s,]+/)
+    // Strip punctuation so 'Q.' and 'Mary-Jane' contribute their first LETTER,
+    // and drop tokens with no letter at all (a middle initial's bare '.').
+    .map(t => t.replace(/[^\p{L}]/gu, ''))
+    .filter(Boolean)
+
+  if (tokens.length === 0) return ''
+
+  // First and last only: a middle name is noise here, and the pair is what
+  // distinguishes two patients in a folder listing.
+  const picked = tokens.length === 1 ? [tokens[0]] : [tokens[0], tokens[tokens.length - 1]]
+
+  return picked.map(t => t.charAt(0).toUpperCase()).join('').slice(0, 3)
+}
+
+/**
  * "Prone", or null when no position was recorded.
  *
  * Null is meaningful: setContext() deliberately leaves an unchosen position

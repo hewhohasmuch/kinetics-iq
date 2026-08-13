@@ -447,10 +447,22 @@ export class SessionDetailView {
 
     const restore = btn.textContent
     btn.disabled = true
-    btn.textContent = 'Preparing…'      // two JPEGs — not instant on a phone
 
     try {
-      const { blob, filename, missingImages } = await exportSessionsAsPdf([this.session])
+      // The sheet comes first, so "Preparing…" must not appear behind it — the
+      // button is only busy once there is actually something to prepare.
+      const result = await exportSessionsAsPdf([this.session], {
+        onStart: () => { btn.textContent = 'Preparing…' },   // two JPEGs, not instant
+      })
+
+      // Cancelled: leave the screen exactly as it was, with no flash of
+      // "Saved" or "failed" for something the user deliberately stopped.
+      if (!result) {
+        btn.textContent = restore
+        return
+      }
+
+      const { blob, filename, missingImages } = result
       this._pdf = { blob, filename }
 
       btn.textContent = missingImages > 0 ? 'Saved — photos missing' : 'Saved ✓'

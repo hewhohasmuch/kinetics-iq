@@ -455,6 +455,12 @@ const DEFAULT_SETTINGS = {
     distal:   2,
   },
   active_patient_id: null,
+  // Put the patient's initials in an exported PDF's FILENAME (never on the
+  // page). Defaults on because a file with no identifier at all is the easier
+  // one to mis-file into the wrong chart, and mis-filing is the worse incident.
+  // Toggled from the export confirmation sheet — there is no settings screen,
+  // and the sheet is the only moment the choice is meaningful.
+  export_include_initials: true,
 }
 
 /**

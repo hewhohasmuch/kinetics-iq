@@ -15,6 +15,7 @@ import {
   splitJoint,
   jointLabel,
   sideLabel,
+  patientInitials,
   positionLabel,
   motionLabel,
   extremeLabels,
@@ -70,6 +71,50 @@ describe('sideLabel', () => {
 
   it('returns empty string for an absent side', () => {
     expect(sideLabel(null)).toBe('')
+  })
+
+})
+
+describe('patientInitials', () => {
+
+  // These label an exported file while it travels to the EHR. They are the only
+  // thing distinguishing two anonymous PDFs in a Downloads folder, so an empty
+  // result has to stay empty — a placeholder like '--' would look like a real
+  // label and defeat the point.
+
+  it('takes the first and last name', () => {
+    expect(patientInitials('Jane Patient')).toBe('JP')
+  })
+
+  it('skips a middle name or initial', () => {
+    expect(patientInitials('Jane Q. Patient')).toBe('JP')
+    expect(patientInitials('Jane Quinn Marie Patient')).toBe('JP')
+  })
+
+  it('handles a single-token name', () => {
+    expect(patientInitials('Cher')).toBe('C')
+  })
+
+  it('reads through hyphens rather than treating them as separators', () => {
+    expect(patientInitials('Mary-Jane Smith-Jones')).toBe('MS')
+  })
+
+  it('keeps accented initials', () => {
+    expect(patientInitials('José García')).toBe('JG')
+  })
+
+  it('tolerates a comma-ordered name', () => {
+    expect(patientInitials('Patient, Jane')).toBe('PJ')
+  })
+
+  it('returns empty for anything with no letters in it', () => {
+    for (const v of ['', '   ', null, undefined, '...', '12345']) {
+      expect(patientInitials(v)).toBe('')
+    }
+  })
+
+  it('never returns more than three characters', () => {
+    expect(patientInitials('Aaaa Bbbb Cccc Dddd Eeee').length).toBeLessThanOrEqual(3)
   })
 
 })
