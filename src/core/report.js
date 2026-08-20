@@ -50,7 +50,7 @@ import {
   formatSessionTime,
   formatDuration,
 } from './labels.js'
-import { sessionProvenance, calibrationSummary } from './provenance.js'
+import { sessionProvenance, calibrationSummary, extensionFloorCaveat } from './provenance.js'
 
 /** The trailing attribution, shared by every rendering of a session. */
 export const ATTRIBUTION = 'Measured with KineticsIQ'
@@ -75,7 +75,7 @@ export const ATTRIBUTION = 'Measured with KineticsIQ'
  *   heading: string, dateLine: string, romLine: string,
  *   maxLabel: string, maxValue: string, minLabel: string, minValue: string,
  *   durationLine: string, calibrationLine: string,
- *   warning: {level: string, label: string, tail: string}|null,
+ *   warnings: Array<{level: string, label: string, tail: string}>,
  *   notes: string|null, attribution: string,
  * }}
  */
@@ -93,6 +93,17 @@ export function sessionReportModel(session) {
 
   const prov  = sessionProvenance(s)
   const notes = String(s.notes ?? '').trim()
+
+  // Provenance leads: it invalidates the numbers outright, where the floor
+  // caveat qualifies one of them. Both can apply to the same session.
+  const warnings = []
+  if (prov.level !== 'ok') {
+    warnings.push({ level: prov.level, label: prov.label, tail: warningTail(prov.level) })
+  }
+  const floor = extensionFloorCaveat(s)
+  if (floor) {
+    warnings.push({ level: 'floor', label: floor.label, tail: floor.tail })
+  }
 
   return {
     heading:  position ? `${jointLabel(s)} — ${position}` : jointLabel(s),
@@ -113,11 +124,14 @@ export function sessionReportModel(session) {
     // omits whether this was a raw or a zeroed measurement is claiming neither.
     calibrationLine: calibrationSummary(s).text,
 
-    // The most important field when it is not null. Carries no glyph and no
-    // markup — each rendering marks it in whatever way its medium supports.
-    warning: prov.level !== 'ok'
-      ? { level: prov.level, label: prov.label, tail: warningTail(prov.level) }
-      : null,
+    // The most important field when it is non-empty. Entries carry no glyph
+    // and no markup — each rendering marks them however its medium supports,
+    // and a glyph baked in here would corrupt the PDF outright (pdf.js).
+    //
+    // A LIST because a session can carry more than one caveat at once: a record
+    // can be on the legacy scale AND report an un-zeroed minimum. This was a
+    // single field, which silently dropped whichever caveat came second.
+    warnings,
 
     notes: notes || null,
     attribution: ATTRIBUTION,
@@ -147,7 +161,8 @@ export function sessionNoteText(session) {
 
   // Prefixed with a glyph rather than any markup, so it survives a paste into a
   // plain-text note field. (The PDF cannot use this character — see pdf.js.)
-  if (m.warning) lines.push(`⚠ ${m.warning.label} — ${m.warning.tail}`)
+  // One line each: a session carrying two caveats must state both.
+  for (const w of m.warnings) lines.push(`⚠ ${w.label} — ${w.tail}`)
 
   if (m.notes) lines.push(`Note: ${m.notes}`)
 

@@ -14,6 +14,7 @@ import {
   MedianFilter3, OneEuroFilter,
   JOINT_ANGLE_CONVENTION, toClinicalAngle, toInteriorAngle,
   JOINT_MOTION_TERMS, motionTerms,
+  rawCannotGoBelowNeutral,
 } from './angle.js'
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
@@ -630,4 +631,63 @@ describe('motionTerms()', () => {
       expect(JOINT_MOTION_TERMS[joint]).toBeDefined()
     }
   })
+})
+
+// ─── Which joints have a one-sided error at neutral ────────────────────────
+
+describe('rawCannotGoBelowNeutral', () => {
+
+  // jointAngle() is an acos, so interior is confined to [0, 180]. A joint whose
+  // neutral sits at an END of that interval folds its whole range onto one side
+  // of zero, and every landmark error at neutral is rectified into apparent
+  // motion instead of cancelling.
+  it('is true where the clinical mapping bottoms out at neutral', () => {
+    expect(rawCannotGoBelowNeutral('knee')).toBe(true)       // 180 - interior
+    expect(rawCannotGoBelowNeutral('hip')).toBe(true)
+    expect(rawCannotGoBelowNeutral('elbow')).toBe(true)
+    expect(rawCannotGoBelowNeutral('shoulder')).toBe(true)   // interior itself
+  })
+
+  // The ankle's neutral is a right angle, in the MIDDLE of [0, 180], so
+  // dorsiflexion and plantarflexion sit either side of it and errors cancel.
+  it('is false for the ankle, whose neutral is mid-range', () => {
+    expect(rawCannotGoBelowNeutral('ankle')).toBe(false)
+  })
+
+  // Detail views look this up straight off a saved record, which may predate
+  // the joint/side split.
+  it('accepts the legacy combined joint form', () => {
+    expect(rawCannotGoBelowNeutral('knee_right')).toBe(true)
+    expect(rawCannotGoBelowNeutral('ankle_left')).toBe(false)
+  })
+
+  it('falls back to the hinge convention for an unknown joint', () => {
+    expect(rawCannotGoBelowNeutral('wrist')).toBe(true)
+    expect(rawCannotGoBelowNeutral(undefined)).toBe(true)
+  })
+
+  // The claim the predicate encodes, checked against the math rather than the
+  // table: a straight knee cannot read below 0 however the joint point moves.
+  it('matches what jointAngle can actually produce at the knee', () => {
+    const hip = { x: -0.4, y: 0, z: 0 }
+    const ankle = { x: 0.4, y: 0, z: 0 }
+    for (const dz of [-0.05, -0.02, 0, 0.02, 0.05]) {
+      const knee = { x: 0, y: 0, z: dz }
+      const clinical = toClinicalAngle(jointAngle(hip, knee, ankle), 'knee')
+      expect(clinical).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  // ...and displacing it along the unseen depth axis alone is enough to invent
+  // flexion. This is the supine-knee finding in miniature: the drawn 2D
+  // landmarks were collinear to 0.77° while the recorded 3D angle read 9.0°.
+  it('shows depth-only error inventing flexion at full extension', () => {
+    const hip = { x: -0.4, y: 0, z: 0 }
+    const ankle = { x: 0.4, y: 0, z: 0 }
+    const flat = toClinicalAngle(jointAngle(hip, { x: 0, y: 0, z: 0 }, ankle), 'knee')
+    const off  = toClinicalAngle(jointAngle(hip, { x: 0, y: 0, z: 0.031 }, ankle), 'knee')
+    expect(flat).toBeCloseTo(0, 6)
+    expect(off).toBeGreaterThan(8)   // ~3cm of depth error ≈ 9°
+  })
+
 })

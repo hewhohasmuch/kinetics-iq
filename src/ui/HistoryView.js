@@ -34,7 +34,7 @@ import {
   jointLabel, positionLabel, romArc, motionLabel,
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
-import { sessionProvenance } from '../core/provenance.js'
+import { sessionProvenance, extensionFloorCaveat } from '../core/provenance.js'
 import { exportSessionsAsPdf } from './exportPdf.js'
 import { Chart } from 'chart.js/auto'
 
@@ -395,6 +395,14 @@ export class HistoryView {
     const legacyBadge = prov.level !== 'ok'
       ? `<span class="legacy-badge" title="${prov.reason}">⚠ ${prov.label}</span>`
       : ''
+    // The row leads with the ROM arc, whose lower end is the number in
+    // question, so the qualification belongs next to it. Unlike the badge
+    // above this says nothing about which build recorded the session — it is
+    // read off the measurement itself.
+    const floor      = extensionFloorCaveat(session)
+    const floorBadge = floor
+      ? `<span class="legacy-badge" title="${floor.reason}">⚠ ${floor.label}</span>`
+      : ''
 
     const selected = this._selected.has(session.id)
 
@@ -403,7 +411,7 @@ export class HistoryView {
         <div class="row-check">${selected ? '✓' : ''}</div>
         <div class="session-info">
           <div class="session-date">${date} <span class="session-time">${time}</span></div>
-          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${positionBadge}${legacyBadge}</div>
+          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${positionBadge}${legacyBadge}${floorBadge}</div>
           ${session.notes ? `<div class="session-notes">${session.notes}</div>` : ''}
         </div>
         <div class="session-stats">

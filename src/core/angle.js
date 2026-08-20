@@ -157,6 +157,55 @@ export function toInteriorAngle(clinicalAngle, joint) {
 }
 
 /**
+ * Whether this joint's RAW (un-zeroed) clinical angle is bounded below by its
+ * own neutral — the reading can never go past neutral in the negative
+ * direction, no matter what the limb actually does.
+ *
+ * WHY THIS FALLS OUT OF THE CONVENTION TABLE:
+ * jointAngle() returns Math.acos(...), so the interior angle is confined to
+ * [0, 180]. When a joint's neutralInterior sits at an END of that interval, the
+ * clinical mapping folds the entire range onto one side of zero:
+ *
+ *   neutralInterior 180 (knee/hip/elbow) -> clinical = 180 - interior in [0, 180]
+ *   neutralInterior 0   (shoulder)       -> clinical = interior       in [0, 180]
+ *   neutralInterior 90  (ankle)          -> clinical = 90 - interior  in [-90, 90]
+ *
+ * The first two reach 0 only if the three landmarks are exactly collinear. Any
+ * landmark error therefore RECTIFIES — a kink is a kink whichever way the joint
+ * point is displaced — so error at neutral accumulates in one direction instead
+ * of cancelling. No filter removes it: MedianFilter3 rejects spikes and
+ * OneEuroFilter trades lag against noise; neither touches a bias.
+ *
+ * MEASURED, on the supine right knee in tmp/right knee supine.png. Within the
+ * SAME captured frame (the overlay dots and the burned-in label are composited
+ * from one frame — see "One value, everywhere" in CLAUDE.md):
+ *
+ *   flat leg: drawn 2D landmarks collinear to 0.77°, recorded 3D angle 9.0°
+ *   bent leg: drawn 2D landmarks           127.32°, recorded 3D angle 121.8°
+ *
+ * So the knee landmarks are placed well in the image plane, and essentially the
+ * whole floor comes from the monocular depth estimate — which carries almost no
+ * real signal for a limb lying in the image plane, but feeds straight into the
+ * rectified error via BAz/BCz. Note the gap REVERSES sign across the range
+ * (+8.2° at extension, -5.5° at flexion), so a single calibration subtraction
+ * cannot correct it: the same shape of problem as the shoulder, and the reason
+ * Set Zero must not be offered as the cure. See the limitation in CLAUDE.md.
+ *
+ * The ankle escapes: its neutral is mid-range, so its errors are two-sided.
+ *
+ * Accepts the legacy combined 'knee_right' form, like motionTerms(), because
+ * saved records are read straight off the session.
+ *
+ * @param {string} joint
+ * @returns {boolean}
+ */
+export function rawCannotGoBelowNeutral(joint) {
+  const base = String(joint ?? '').split('_')[0]
+  const c = JOINT_ANGLE_CONVENTION[base] ?? DEFAULT_CONVENTION
+  return c.neutralInterior === 0 || c.neutralInterior === 180
+}
+
+/**
  * The clinical NAME of the motion in each direction, per joint.
  *
  * The companion to JOINT_ANGLE_CONVENTION: that table fixes what the number

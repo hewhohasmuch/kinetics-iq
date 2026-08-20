@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { sessionProvenance, isLegacySession, calibrationSummary } from './provenance.js'
+import { sessionProvenance, isLegacySession, calibrationSummary, extensionFloorCaveat } from './provenance.js'
 
 const current = { angleMode: '3d', angleFilter: 'euro1', angleConvention: 'perjoint1' }
 
@@ -97,6 +97,68 @@ describe('calibrationSummary', () => {
   it('treats null the same as absent', () => {
     expect(calibrationSummary({ calibrated: null }).known).toBe(false)
     expect(calibrationSummary(null).known).toBe(false)
+  })
+
+})
+
+// ─── The measurement floor ─────────────────────────────────────────────────
+
+describe('extensionFloorCaveat', () => {
+
+  const raw = { joint: 'knee', calibrated: false, min: 9 }
+
+  it('flags an un-zeroed knee whose minimum sits above neutral', () => {
+    const c = extensionFloorCaveat(raw)
+    expect(c.label).toBe('Minimum may be measurement floor')
+    expect(c.tail).toContain('9°')
+    expect(c.tail).toContain('extension deficit')
+  })
+
+  // The raw reading cannot go below 0, so a minimum of exactly 0 has not been
+  // pushed up by anything — there is nothing to caveat.
+  it('is silent when the minimum is exactly 0', () => {
+    expect(extensionFloorCaveat({ ...raw, min: 0 })).toBeNull()
+  })
+
+  it('is silent once a zero was captured', () => {
+    expect(extensionFloorCaveat({ ...raw, calibrated: true })).toBeNull()
+  })
+
+  // Absence is the third state, as everywhere else in this file: nobody
+  // recorded whether this was zeroed, and "Calibration not recorded" already
+  // says so. Firing here would assert a mechanism we cannot confirm applied.
+  it('is silent when the calibration state was never recorded', () => {
+    expect(extensionFloorCaveat({ joint: 'knee', min: 9 })).toBeNull()
+    expect(extensionFloorCaveat({ ...raw, calibrated: null })).toBeNull()
+  })
+
+  // The ankle's neutral is mid-range (interior 90 of 0–180), so its errors are
+  // two-sided and cancel. It has no floor to warn about.
+  it('is silent for the ankle, whose neutral is mid-range', () => {
+    expect(extensionFloorCaveat({ ...raw, joint: 'ankle' })).toBeNull()
+  })
+
+  // Same mechanism, larger: the shoulder's raw reading sits ~25° high at rest.
+  it('flags the shoulder, whose neutral is also at a range end', () => {
+    expect(extensionFloorCaveat({ joint: 'shoulder', calibrated: false, min: 24.6 })).not.toBeNull()
+  })
+
+  it('reads the legacy combined joint form off a saved record', () => {
+    expect(extensionFloorCaveat({ ...raw, joint: 'knee_right' })).not.toBeNull()
+  })
+
+  // It must not prescribe Set Zero. Measured on the knee, the error reverses
+  // sign across the range (+8.2° at extension, -5.5° at flexion), and
+  // CalibrationManager.apply() is a single subtraction — zeroing would fix the
+  // minimum and push the peak further from truth.
+  it('states what is unknown without recommending a fix', () => {
+    const c = extensionFloorCaveat(raw)
+    expect(`${c.tail} ${c.reason}`).not.toMatch(/Set Zero|re-?zero|calibrate/i)
+  })
+
+  it('does not throw on null or undefined', () => {
+    expect(extensionFloorCaveat(null)).toBeNull()
+    expect(extensionFloorCaveat(undefined)).toBeNull()
   })
 
 })

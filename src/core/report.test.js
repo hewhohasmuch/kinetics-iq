@@ -230,16 +230,53 @@ describe('sessionReportModel — the shared source of both renderings', () => {
     }
   })
 
-  it('carries the warning as data, leaving each medium to mark it', () => {
+  it('carries warnings as data, leaving each medium to mark them', () => {
     // The note prefixes a ⚠; the PDF draws a band, because its base font has
     // no such glyph. Neither claim belongs in the model.
     const m = sessionReportModel(makeSession({ angleConvention: undefined }))
-    expect(m.warning).toMatchObject({ level: 'convention', label: 'Legacy scale' })
-    expect(m.warning.tail).not.toContain('⚠')
+    expect(m.warnings[0]).toMatchObject({ level: 'convention', label: 'Legacy scale' })
+    expect(m.warnings[0].tail).not.toContain('⚠')
   })
 
-  it('reports no warning for a fully stamped session', () => {
-    expect(sessionReportModel(makeSession()).warning).toBeNull()
+  it('reports no warnings for a fully stamped, zeroed session', () => {
+    expect(sessionReportModel(makeSession()).warnings).toEqual([])
+  })
+
+  // A single `warning` field silently dropped whichever caveat came second,
+  // and the two say different things: one invalidates every number on the
+  // page, the other qualifies one of them.
+  it('carries BOTH caveats when a session is legacy AND un-zeroed', () => {
+    const m = sessionReportModel(makeSession({
+      angleConvention: undefined, calibrated: false, min: 9,
+    }))
+    expect(m.warnings.map(w => w.level)).toEqual(['convention', 'floor'])
+  })
+
+  it('emits one ⚠ line per warning, provenance first', () => {
+    const flagged = lines(makeSession({
+      angleConvention: undefined, calibrated: false, min: 9,
+    })).filter(l => l.startsWith('⚠'))
+    expect(flagged).toHaveLength(2)
+    expect(flagged[0]).toContain('Legacy scale')
+    expect(flagged[1]).toContain('Minimum may be measurement floor')
+  })
+
+  // The whole point of the caveat: this session's stamps are all CURRENT, so
+  // sessionProvenance() clears it and it would otherwise export looking clean
+  // while its headline arc claims a 9° extension deficit.
+  it('flags an un-zeroed minimum on a session whose stamps are all current', () => {
+    const text = sessionNoteText(makeSession({ calibrated: false, min: 9 }))
+    expect(text).toContain('⚠ Minimum may be measurement floor')
+    expect(text).toContain('9°')
+    expect(text).not.toContain('Legacy')
+  })
+
+  // It must not prescribe Set Zero: the error reverses sign across the range
+  // (+8.2° at extension, -5.5° at flexion on the measured knee), so a single
+  // subtraction would fix the minimum and push the peak further from truth.
+  it('states what is unknown without recommending Set Zero', () => {
+    const text = sessionNoteText(makeSession({ calibrated: false, min: 9 }))
+    expect(text).not.toMatch(/Set Zero|re-?zero|calibrate/i)
   })
 
   it('leaves absent notes and position as null rather than empty strings', () => {
