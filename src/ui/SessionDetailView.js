@@ -24,7 +24,7 @@ import {
   extremeLabels, jointLabel, positionLabel, romArc, motionLabel,
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
-import { sessionProvenance, calibrationSummary } from '../core/provenance.js'
+import { sessionProvenance, calibrationSummary, extensionFloorCaveat } from '../core/provenance.js'
 import { sessionNoteText } from '../core/report.js'
 import { resolveFrameBlob } from '../core/frames.js'
 import { exportSessionsAsPdf, canShareFile, shareFile } from './exportPdf.js'
@@ -154,6 +154,15 @@ export class SessionDetailView {
     if (prov.level !== 'ok') {
       parts.push(
         `<span class="prov-chip legacy" title="${prov.reason}">⚠ ${prov.label}</span>`
+      )
+    }
+
+    // Read off the measurement rather than the stamps, so it fires on sessions
+    // this build recorded — which is exactly the case the stamps cannot catch.
+    const floor = extensionFloorCaveat(s)
+    if (floor) {
+      parts.push(
+        `<span class="prov-chip legacy" title="${floor.reason}">⚠ ${floor.label}</span>`
       )
     }
 

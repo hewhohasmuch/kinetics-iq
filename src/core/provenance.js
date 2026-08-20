@@ -30,6 +30,8 @@
  * Pure — no DOM, testable in Node.
  */
 
+import { rawCannotGoBelowNeutral, motionTerms } from './angle.js'
+
 /**
  * @typedef {object} Provenance
  * @property {'ok'|'filter'|'convention'} level
@@ -98,5 +100,54 @@ export function calibrationSummary(session) {
     text:       offset === undefined || offset === null
       ? 'Zeroed'
       : `Zeroed at ${offset}°`,
+  }
+}
+
+/**
+ * Flag a minimum that cannot be distinguished from the measurement floor.
+ *
+ * WHY THIS IS DIFFERENT FROM THE TWO ABOVE:
+ * sessionProvenance() and calibrationSummary() read STAMPS — facts about which
+ * version of the app produced the record. This one reads the MEASUREMENT, and
+ * fires on sessions whose stamps are all current. That gap was the hazard: a
+ * session recorded by today's build exports looking clean, and romArc leads the
+ * note and the PDF with the arc, whose lower end is exactly the number in
+ * question. A knee reported as "9° – 121.8°" is claiming a 9° extension lag —
+ * a real, treatment-driving finding — when the raw reading cannot go below 0
+ * at all (see rawCannotGoBelowNeutral in angle.js).
+ *
+ * FIRES ONLY ON THE POSITIVE CLAIM. `calibrated === false` means the session
+ * recorded that it was measured raw. Absence means nobody recorded anything,
+ * and those sessions already surface "Calibration not recorded", which carries
+ * its own uncertainty — asserting this mechanism applied to them would
+ * manufacture the very claim calibrationSummary() is careful not to make.
+ *
+ * DELIBERATELY DOES NOT RECOMMEND SET ZERO. Measured on the knee in
+ * tmp/right knee supine.png, the error reverses sign across the range (+8.2° at
+ * extension, -5.5° at flexion), and CalibrationManager.apply() is a single
+ * subtraction — so zeroing at full extension would fix the bottom and push the
+ * peak further from truth, exactly as the shoulder limitation in CLAUDE.md
+ * describes. The caveat states what is not known; it does not prescribe.
+ *
+ * @param {{joint?: string, calibrated?: boolean, min?: number}} session
+ * @returns {{label: string, reason: string, tail: string}|null}
+ */
+export function extensionFloorCaveat(session) {
+  if (!session) return null
+  if (session.calibrated !== false) return null
+  if (!rawCannotGoBelowNeutral(session.joint)) return null
+  if (!(session.min > 0)) return null
+
+  const negative = motionTerms(session.joint).negative
+
+  return {
+    label:  'Minimum may be measurement floor',
+    tail:   `measured raw, and the ${session.min}° minimum cannot be separated from the ` +
+            `measurement floor, so it should not be read as an ${negative} deficit on its own.`,
+    reason: `This session was recorded without a captured zero. The raw angle for this joint ` +
+            `cannot go below 0°, so every landmark error at neutral is folded into apparent ` +
+            `motion and the minimum sits above the true value by an unknown amount. The ` +
+            `figure is what was measured; it is not, on its own, evidence of an ${negative} ` +
+            `deficit.`,
   }
 }

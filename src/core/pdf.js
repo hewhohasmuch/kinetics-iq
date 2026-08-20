@@ -218,7 +218,10 @@ async function renderSessionPage(doc, session, images) {
   doc.text(winAnsi(m.calibrationLine), MARGIN, y)
   y += 16
 
-  if (m.warning) y = drawWarning(doc, y, m.warning)
+  // One band each. A session can be on the legacy scale AND report an
+  // un-zeroed minimum, and a document that prints only the first is the same
+  // failure this module exists to prevent.
+  for (const w of m.warnings) y = drawWarning(doc, y, w)
 
   if (m.notes) {
     y += 4
@@ -234,7 +237,8 @@ async function renderSessionPage(doc, session, images) {
 }
 
 /**
- * The legacy-provenance band.
+ * One caveat band — legacy provenance, or a minimum that cannot be separated
+ * from the measurement floor. Called once per entry in the model's `warnings`.
  *
  * Drawn as a filled block rather than prefixed with the note's `⚠`, which the
  * base font cannot render (see the encoding trap). The wording is the model's,

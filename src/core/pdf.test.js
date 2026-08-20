@@ -153,6 +153,28 @@ describe('buildSessionPdf — provenance', () => {
   it('stays clean for a current session', async () => {
     await buildSessionPdf([makeSession()])
     expect(allText()).not.toMatch(/LEGACY/i)
+    expect(allText()).not.toMatch(/measurement floor/i)
+  })
+
+  // The stamps cannot catch this one: every stamp on this session is current,
+  // so the document would otherwise print "5° – 120°" — a claimed extension
+  // deficit — with nothing qualifying it.
+  it('warns that an un-zeroed minimum may be the measurement floor', async () => {
+    await buildSessionPdf([makeSession({ calibrated: false, min: 9 })])
+    const text = allText()
+    expect(text).toContain('MINIMUM MAY BE MEASUREMENT FLOOR')
+    expect(text).toContain('should not be read as an extension deficit')
+  })
+
+  // A single warning field printed only the first of these.
+  it('stacks a band for each caveat when a session is legacy AND un-zeroed', async () => {
+    await buildSessionPdf([makeSession({
+      angleConvention: undefined, calibrated: false, min: 9,
+    })])
+    const text = allText()
+    expect(text).toContain('LEGACY SCALE')
+    expect(text).toContain('MINIMUM MAY BE MEASUREMENT FLOOR')
+    expect(allText()).not.toContain('⚠')
   })
 
   it('always states the calibration, including when it was never recorded', async () => {
