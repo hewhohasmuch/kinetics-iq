@@ -393,4 +393,56 @@ describe('measurement position', () => {
     expect(sessionWithContext().position).toBeNull()
   })
 
+  // ─── out-of-plane provenance ─────────────────────────────────────────
+  //
+  // The measured angle is the 2D projection, which is the joint angle only
+  // while the limb stays in the image plane. maxSegmentTilt is the saved
+  // record of whether that held, so its absence semantics matter as much as
+  // the calibration stamps': null means nobody measured, 0 means measured and
+  // in plane, and those are different claims.
+  describe('segment tilt', () => {
+    const run = (tilts) => {
+      const r = new SessionRecorder()
+      r.start()
+      r.record(10)
+      for (const t of tilts) r.recordTilt(t)
+      return r.stop()
+    }
+
+    it('keeps the WORST excursion, not the last or the mean', () => {
+      expect(run([2, 31.4, 3]).maxSegmentTilt).toBe(31.4)
+    })
+
+    it('records 0 when the limb stayed in plane', () => {
+      expect(run([0, 0]).maxSegmentTilt).toBe(0)
+    })
+
+    it('stays null when tilt was never measured', () => {
+      expect(run([]).maxSegmentTilt).toBeNull()
+    })
+
+    it('ignores null and NaN samples rather than poisoning the max', () => {
+      expect(run([null, undefined, NaN, 12]).maxSegmentTilt).toBe(12)
+    })
+
+    it('ignores tilt recorded outside an active session', () => {
+      const r = new SessionRecorder()
+      r.recordTilt(40)
+      r.start()
+      r.record(10)
+      expect(r.stop().maxSegmentTilt).toBeNull()
+    })
+
+    it('does not carry a previous bout\u0027s tilt into the next', () => {
+      const r = new SessionRecorder()
+      r.start(); r.record(10); r.recordTilt(40); r.stop()
+      r.start(); r.record(10)
+      expect(r.stop().maxSegmentTilt).toBeNull()
+    })
+
+    it('rounds to 1dp like every other saved figure', () => {
+      expect(run([27.26666]).maxSegmentTilt).toBe(27.3)
+    })
+  })
+
 })

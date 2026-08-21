@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import { sessionProvenance, isLegacySession, calibrationSummary, extensionFloorCaveat } from './provenance.js'
 
-const current = { angleMode: '3d', angleFilter: 'euro1', angleConvention: 'perjoint1' }
+const current = { angleMode: '2d2', angleFilter: 'euro1', angleConvention: 'perjoint1' }
 
 describe('sessionProvenance', () => {
 
@@ -23,6 +23,45 @@ describe('sessionProvenance', () => {
     expect(p.level).toBe('convention')
     expect(p.label).toBe('Legacy scale')
     expect(p.reason).toMatch(/cannot be compared/)
+  })
+
+  // The depth stamp is the reason this file gained a third verdict. A '3d'
+  // session is not merely imprecise: measured against a goniometer on a right
+  // elbow, a true 10.4°–140° arc recorded as 13.6°–115.4°, understating total
+  // ROM by 21%, with the error reversing sign across the range.
+  it('flags a 3d session as depth-estimated', () => {
+    const p = sessionProvenance({ ...current, angleMode: '3d' })
+    expect(p.level).toBe('depth')
+    expect(p.label).toBe('Depth-estimated angles')
+    expect(p.reason).toMatch(/reverses sign/)
+  })
+
+  // ABSENT angleMode is the pre-3D era, which was ALSO 2D. Reporting it as
+  // depth-estimated would assert a mechanism that did not apply — the same
+  // discipline calibrationSummary() keeps between "not recorded" and "raw".
+  it('does not treat an absent angleMode as depth-estimated', () => {
+    expect(sessionProvenance({ ...current, angleMode: undefined }).level).toBe('ok')
+  })
+
+  it('clears the current 2d2 stamp', () => {
+    expect(sessionProvenance({ ...current, angleMode: '2d2' }).level).toBe('ok')
+  })
+
+  // Ordering again: the convention is unrecoverable and outranks depth, and
+  // depth outranks the filter because it distorts the whole range rather than
+  // clipping the extremes.
+  it('reports the convention over depth when both apply', () => {
+    const p = sessionProvenance({ ...current, angleMode: '3d', angleConvention: undefined })
+    expect(p.level).toBe('convention')
+  })
+
+  it('reports depth over the filter when both apply', () => {
+    const p = sessionProvenance({ ...current, angleMode: '3d', angleFilter: undefined })
+    expect(p.level).toBe('depth')
+  })
+
+  it('counts a depth-estimated session as legacy', () => {
+    expect(isLegacySession({ ...current, angleMode: '3d' })).toBe(true)
   })
 
   it('flags a session missing only the filter as reading low', () => {

@@ -1,0 +1,39 @@
+-- Migration: out-of-plane provenance on sessions
+--
+-- Apply to an EXISTING KineticsIQ project (tables already created from
+-- schema.sql). Idempotent — safe to run more than once. Paste into the
+-- Supabase SQL editor and Run. New projects can just apply schema.sql, which
+-- already includes everything below.
+--
+-- APPLY THIS BEFORE DEPLOYING the code change that maps this column.
+-- PostgREST rejects an insert naming an unknown column with a 4xx, and
+-- sync.js treats permanent errors as unretryable and DROPS the op — so
+-- deploying first would silently stop sessions syncing rather than fail
+-- loudly. Same hazard as 0003 and 0004; the ordering is not optional.
+--
+-- What it does:
+--   Adds max_segment_tilt to sessions: the worst out-of-plane excursion, in
+--   degrees, seen on either limb segment during the recording.
+--
+-- Why it matters:
+--   The measured angle is now computed from the 2D image landmarks rather than
+--   the monocular 3D world landmarks, because that depth estimate is not
+--   metrically self-consistent — rigid bone lengths drift ~8% RMS between two
+--   frames of the same person, and the resulting angle error reverses sign
+--   across the range. Measured against a goniometer on a right elbow, a true
+--   10.4–140 degree arc recorded as 13.6–115.4, understating total ROM by 21%.
+--
+--   But a 2D projection equals the joint angle ONLY while the limb moves
+--   parallel to the image plane. A segment tilted toward the camera projects
+--   short and the angle reads low. This column is the record of whether that
+--   assumption held for the session, so a reading taken off-axis can be
+--   identified after the fact rather than trusted silently.
+--
+-- ABSENCE SEMANTICS — nullable, not `not null default 0`:
+--   NULL means the tilt was never measured (every session predating this, and
+--   any recorded without world-landmark data). 0 is the positive claim that
+--   the limb was measured and found to be in plane. Defaulting existing rows
+--   to 0 would manufacture a clean bill of health for every session that came
+--   before the guard existed. Same rule as `calibrated` in 0004.
+
+alter table public.sessions add column if not exists max_segment_tilt real;

@@ -177,7 +177,8 @@ export function sessionNoteText(session) {
  * a chart note — but the verdict it carries must not soften on the way here.
  */
 function warningTail(level) {
-  return level === 'convention'
-    ? 'these numbers cannot be compared or corrected.'
-    : 'recorded through the old moving-average filter; the range reads low.'
+  if (level === 'convention') return 'these numbers cannot be compared or corrected.'
+  if (level === 'depth')      return 'measured from monocular depth, which understates range; ' +
+                                     'the total reads low by an unknown amount.'
+  return 'recorded through the old moving-average filter; the range reads low.'
 }

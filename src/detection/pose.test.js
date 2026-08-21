@@ -148,6 +148,62 @@ describe('PoseDetector', () => {
     expect(detector.getJointPoints(markers)).not.toBeNull()
   })
 
+  // ─── segmentTilt: the guard that makes the 2D angle path honest ──────
+  //
+  // The measured angle comes from the 2D image points, which equal the joint
+  // angle only while the limb lies in the image plane. These pin that the
+  // guard actually reports tilt, and that it stays silent rather than
+  // reporting a confident 0 when there is no depth data to judge from.
+
+  const tiltCase = async (world) => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks()], worldLandmarks: [makeWorld(world)] })
+    const { markers } = detector.detect(makeVideoEl())
+    return detector.segmentTilt(markers)
+  }
+
+  it('segmentTilt reports 0 for segments lying in the image plane', async () => {
+    // knee right: proximal=24, joint=26, distal=28 — all at the same depth
+    expect(await tiltCase({
+      24: { x: 0.0, y: 0.0, z: 0.5 },
+      26: { x: 0.0, y: 0.3, z: 0.5 },
+      28: { x: 0.2, y: 0.6, z: 0.5 },
+    })).toBeCloseTo(0)
+  })
+
+  it('segmentTilt measures a segment tilted out of the plane', async () => {
+    // distal segment: in-plane 0.3, depth 0.3 -> 45° out of the image plane
+    expect(await tiltCase({
+      24: { x: 0.0, y: 0.0, z: 0.0 },
+      26: { x: 0.0, y: 0.3, z: 0.0 },
+      28: { x: 0.0, y: 0.6, z: 0.3 },
+    })).toBeCloseTo(45)
+  })
+
+  it('segmentTilt returns the WORSE of the two segments', async () => {
+    // proximal 45°, distal 0° — the guard must not average them away, because
+    // one off-axis segment is enough to invalidate the angle.
+    expect(await tiltCase({
+      24: { x: 0.0, y: 0.0, z: 0.3 },
+      26: { x: 0.0, y: 0.3, z: 0.0 },
+      28: { x: 0.0, y: 0.6, z: 0.0 },
+    })).toBeCloseTo(45)
+  })
+
+  // Null, not 0. Absence of depth data is "cannot judge", and reporting 0
+  // would be a positive claim that the limb is in plane.
+  it('segmentTilt returns null when worldLandmarks are absent', async () => {
+    await detector.init()
+    mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks()] })
+    const { markers } = detector.detect(makeVideoEl())
+    expect(detector.segmentTilt(markers)).toBeNull()
+  })
+
+  it('segmentTilt returns null when a marker is missing', async () => {
+    await detector.init()
+    expect(detector.segmentTilt({})).toBeNull()
+  })
+
   it('init() deduplicates concurrent calls', async () => {
     const p1 = detector.init()
     const p2 = detector.init()

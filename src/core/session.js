@@ -32,6 +32,7 @@ export class SessionRecorder {
     this._position  = null
     this._calOffset = null    // null = no calibration state supplied
     this._calibrated = null
+    this._maxTilt   = null    // null = never measured, distinct from 0
   }
 
   // Set the joint, side, and position before start() so they appear in the saved session.
@@ -81,6 +82,27 @@ export class SessionRecorder {
     this._angles    = []
     this._startTime = Date.now()
     this._active    = true
+    this._maxTilt   = null
+  }
+
+  /**
+   * Record how far out of the image plane the limb was on this frame, keeping
+   * the worst value seen. See PoseDetector.segmentTilt().
+   *
+   * WHY THE WORST AND NOT THE MEAN: the angle that matters is the one at the
+   * extremes, and that is exactly where a limb swings off-axis. An average over
+   * a bout that was in-plane for 90% of its duration would hide the moment the
+   * peak was captured — which is the only moment this is about.
+   *
+   * Stays null when nothing was ever measured, which is a different claim from
+   * "measured, and it was 0" — same discipline as the calibration stamps.
+   *
+   * @param {number|null} tiltDeg
+   */
+  recordTilt(tiltDeg) {
+    if (!this._active) return
+    if (tiltDeg === null || tiltDeg === undefined || isNaN(tiltDeg)) return
+    this._maxTilt = this._maxTilt === null ? tiltDeg : Math.max(this._maxTilt, tiltDeg)
   }
 
   /**
@@ -131,7 +153,14 @@ export class SessionRecorder {
       duration_s:    duration,
       samples:       this._angles.length,
       angleTimeline: timeline,   // full sample array for detail chart
-      angleMode:     '3d',       // measured with 3D world landmarks; older sessions lack this (2D)
+      // Angle source generation. '2d2' = measured from the 2D image landmarks.
+      // '3d' = the monocular world landmarks, whose depth error reverses sign
+      // across the range (+13.5 deg at extension, -18.4 deg at peak on the
+      // measured elbow) and understated total ROM by 21%; those sessions read
+      // LOW and provenance.js flags them. ABSENT is a third value again: the
+      // pre-3D era, which was also 2D but on the old filter and convention, so
+      // it cannot be equated with '2d2'.
+      angleMode:     '2d2',
       // Filter generation that produced these angles. Sessions without this
       // field predate the peak-clipping fix and read systematically low at the
       // extremes — do not compare their ROM against 'euro1' sessions as if the
@@ -150,6 +179,11 @@ export class SessionRecorder {
       // sessions carry neither field and must not be read as un-zeroed.
       calibrated:       this._calibrated,
       calibrationOffset: this._calOffset,
+      // Worst out-of-plane excursion seen during the bout, in degrees, or null
+      // if it was never measured. The 2D angle is only the joint angle while
+      // the limb stays in the image plane, so this is the record of whether
+      // that held. Rounded to 1dp like everything else here.
+      maxSegmentTilt: this._maxTilt === null ? null : Math.round(this._maxTilt * 10) / 10,
       notes:         '',
       app_version:   '0.1.0',
       // Supabase Storage paths for the two overlay snapshots. Null until the

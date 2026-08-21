@@ -186,6 +186,53 @@ export class PoseDetector {
     }
   }
 
+  /**
+   * How far the joint's two segments lie OUT OF THE IMAGE PLANE, in degrees.
+   *
+   * WHY THIS EXISTS: the measured angle is computed from the 2D image points
+   * (see MeasureView._runDetection), and that is only the joint angle when the
+   * limb moves parallel to the image plane. A segment tilted toward or away
+   * from the camera projects SHORT, and the angle reads low. Comparing each
+   * segment's in-plane projection against its world-space length recovers that
+   * tilt with no ground truth needed:
+   *
+   *   ratio = |seg_xy| / |seg_xyz|      tilt = acos(ratio)
+   *
+   * COARSE ON PURPOSE. The world lengths it divides by come from the same
+   * depth estimate the 3D angle path was dropped for: measured across two
+   * frames of one subject, rigid bone lengths drift ~8% RMS, which is ~23 deg
+   * of apparent tilt near zero. So this catches GROSS off-axis filming and
+   * nothing finer. Show the clinician a caution, never a number.
+   *
+   * Returns the larger of the two segments' tilt, or null when any marker
+   * lacks world data -- the same condition getJointPoints3D() returns null on.
+   *
+   * @param {object} markers - from detect()
+   * @returns {number|null} degrees; 0 = the segment lies in the image plane
+   */
+  segmentTilt(markers) {
+    const p = markers['proximal']
+    const j = markers['joint']
+    const d = markers['distal']
+    if (!p || !j || !d) return null
+    if (!p.world || !j.world || !d.world) return null
+
+    const tilt = (a, b) => {
+      const dx = a.world.x - b.world.x
+      const dy = a.world.y - b.world.y
+      const dz = a.world.z - b.world.z
+      const xyz = Math.sqrt(dx * dx + dy * dy + dz * dz)
+      // A zero-length segment has no direction in which to be tilted.
+      if (xyz < 1e-6) return 0
+      const xy = Math.sqrt(dx * dx + dy * dy)
+      // xy > xyz is geometrically impossible but reachable in floating point,
+      // and acos would hand back NaN.
+      return Math.acos(Math.min(1, xy / xyz)) * (180 / Math.PI)
+    }
+
+    return Math.max(tilt(p, j), tilt(j, d))
+  }
+
   setJoint(joint) { this.joint = joint }
   setSide(side)   { this.side  = side  }
 

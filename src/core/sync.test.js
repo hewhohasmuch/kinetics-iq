@@ -422,6 +422,51 @@ describe('shape mapping', () => {
     expect(back.angleConvention).toBe('perjoint1')
   })
 
+  // ─── Out-of-plane provenance ─────────────────────────────────────────
+  //
+  // Same hazard as the angle stamps, and pinned the same way: each direction
+  // separately, because a half-mapped field survives a push and vanishes on
+  // the pull that follows it. NULL vs 0 is the load-bearing distinction —
+  // "never measured" against "measured, and the limb was in plane".
+
+  it('pushes the worst segment tilt', () => {
+    expect(sessionToRow({ ...makeSession(), maxSegmentTilt: 31.4 }).max_segment_tilt).toBe(31.4)
+  })
+
+  it('pushes a measured zero as 0, not as null', () => {
+    expect(sessionToRow({ ...makeSession(), maxSegmentTilt: 0 }).max_segment_tilt).toBe(0)
+  })
+
+  it('pushes null when tilt was never measured', () => {
+    expect(sessionToRow(makeSession()).max_segment_tilt).toBeNull()
+  })
+
+  it('reads the tilt back off a row', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      max_segment_tilt: 31.4, updated_at: new Date(0).toISOString(),
+    })
+    expect(back.maxSegmentTilt).toBe(31.4)
+  })
+
+  it('reads a measured zero back as 0, not as null', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      max_segment_tilt: 0, updated_at: new Date(0).toISOString(),
+    })
+    expect(back.maxSegmentTilt).toBe(0)
+  })
+
+  it('round-trips the tilt so a pull cannot erase an off-axis warning', () => {
+    const back = rowToSession(sessionToRow({ ...makeSession(), maxSegmentTilt: 31.4 }))
+    expect(back.maxSegmentTilt).toBe(31.4)
+  })
+
+  it('round-trips a measured zero without turning it into never-measured', () => {
+    const back = rowToSession(sessionToRow({ ...makeSession(), maxSegmentTilt: 0 }))
+    expect(back.maxSegmentTilt).toBe(0)
+  })
+
   // ─── Calibration provenance ──────────────────────────────────────────
   //
   // Whether a session was zeroed, and by how much, is only knowable from these

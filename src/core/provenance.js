@@ -12,7 +12,7 @@
  * peak of a dynamic sweep, so an old session sitting next to a new one looks
  * like the patient improved when all that changed was the filter.
  *
- * The two stamps are not equally bad, so they get different verdicts:
+ * The three stamps are not equally bad, so they get different verdicts:
  *
  *   angleConvention 'perjoint1' — the per-joint clinical mapping. WITHOUT it,
  *     shoulder values are on an inverted scale, ankle values are offset by 90°,
@@ -20,12 +20,24 @@
  *     point clamped to 0. These numbers are NOT recoverable: the calibration
  *     offset was never stored on the session and the clamped samples are gone.
  *
+ *   angleMode '3d' — the monocular world landmarks. Those sessions read LOW at
+ *     end range and HIGH near neutral, because the depth estimate is not
+ *     metrically self-consistent: rigid bone lengths drift ~8% RMS between two
+ *     frames of the same person. Measured on a right elbow against a goniometer,
+ *     a true 10.4°–140° arc recorded as 13.6°–115.4° — total ROM understated by
+ *     21%. Because the error REVERSES SIGN across the range, no calibration
+ *     offset can remove it. Current sessions carry angleMode '2d2'.
+ *
  *   angleFilter 'euro1' — One Euro smoothing. WITHOUT it, the session went
  *     through the 15-sample moving average, whose ~0.7s of lag clipped the
  *     peaks. The shape is right and the joint is right; the extremes read low.
  *
- * A session missing the convention is missing the worse of the two, so it is
- * checked first — reporting it as merely "peaks read low" would understate it.
+ * A session missing the convention is missing the worst of the three, so it is
+ * checked first — reporting it as merely "peaks read low" would understate it,
+ * and the depth verdict is checked before the filter one for the same reason.
+ * Note ABSENT angleMode is NOT the depth case: it means the pre-3D era, which
+ * was also 2D, and those sessions are already caught by the two checks around
+ * it. Only the positive claim '3d' is flagged.
  *
  * Pure — no DOM, testable in Node.
  */
@@ -34,7 +46,7 @@ import { rawCannotGoBelowNeutral, motionTerms } from './angle.js'
 
 /**
  * @typedef {object} Provenance
- * @property {'ok'|'filter'|'convention'} level
+ * @property {'ok'|'filter'|'depth'|'convention'} level
  * @property {string|null} label   short badge text, null when nothing to flag
  * @property {string|null} reason  longer explanation for a tooltip
  */
@@ -42,7 +54,7 @@ import { rawCannotGoBelowNeutral, motionTerms } from './angle.js'
 /**
  * Assess a saved session's angle provenance.
  *
- * @param {{angleConvention?: string, angleFilter?: string}} session
+ * @param {{angleConvention?: string, angleMode?: string, angleFilter?: string}} session
  * @returns {Provenance}
  */
 export function sessionProvenance(session) {
@@ -53,6 +65,19 @@ export function sessionProvenance(session) {
       reason: 'Recorded before the per-joint angle convention: shoulder values are on an ' +
               'inverted scale, ankle values are offset by 90°, and any reading past a Set ' +
               'Zero was clamped to 0. These numbers cannot be compared or corrected.',
+    }
+  }
+
+  if (session.angleMode === '3d') {
+    return {
+      level:  'depth',
+      label:  'Depth-estimated angles',
+      reason: 'Measured from monocular 3D world landmarks. That depth estimate is not ' +
+              'metrically self-consistent — rigid bone lengths drift about 8% between frames ' +
+              'of the same person — and the resulting angle error reverses sign across the ' +
+              'range, reading high near neutral and low at end range. On the measured elbow it ' +
+              'understated total ROM by 21%. The error cannot be removed by a Set Zero, ' +
+              'because a single subtraction cannot correct an error that changes sign.',
     }
   }
 
