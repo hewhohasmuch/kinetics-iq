@@ -44,7 +44,10 @@ const SAMPLE_COUNT = 20   // frames to average during calibration capture
 //       rescaled the shoulder and ankle. A shoulder offset captured under the
 //       old inverted scale was ~165°, at the very top of the range; carried
 //       over, it would put every subsequent reading far below zero.
-export const CALIBRATION_VERSION = 2
+// Version 3 moved the measured angle off the 3D world landmarks onto the 2D
+// image points. That rescales the raw angle, so an offset captured under the
+// 3D path is meaningless against a 2D reading and must be discarded.
+export const CALIBRATION_VERSION = 3
 
 export class CalibrationManager {
   constructor() {

@@ -45,7 +45,7 @@ function makeSession(overrides = {}) {
     min: 5, max: 120, rom: 115,
     duration_s: 30, samples: 300,
     angleTimeline: [5, 60, 120],
-    angleMode: '3d', notes: '', app_version: '0.1.0',
+    angleMode: '2d2', notes: '', app_version: '0.1.0',
     patient_id: generateId(),
     ...overrides,
   }

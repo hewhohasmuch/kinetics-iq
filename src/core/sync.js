@@ -250,6 +250,11 @@ export function sessionToRow(s) {
     // the session would come back claiming its calibration was never recorded.
     calibrated:         s.calibrated ?? null,
     calibration_offset: s.calibrationOffset ?? null,
+    // Out-of-plane provenance travels for the same reason as the stamps above.
+    // The 2D angle is the joint angle only while the limb stays in the image
+    // plane; this says whether it did. Dropping it in the round-trip would
+    // bring the session back claiming that was never checked.
+    max_segment_tilt:   s.maxSegmentTilt ?? null,
     notes:          s.notes ?? '',
     app_version:    s.app_version ?? null,
     peak_frame_path: s.peakFramePath ?? null,
@@ -285,6 +290,10 @@ export function rowToSession(row) {
     // recorded" into the positive claim "measured raw".
     calibrated:        row.calibrated ?? undefined,
     calibrationOffset: row.calibration_offset ?? undefined,
+    // Null column -> null, NOT undefined and NOT 0: "never measured" is the
+    // same claim on both sides of the wire here, and 0 would assert the limb
+    // was checked and found in plane.
+    maxSegmentTilt:    row.max_segment_tilt ?? null,
     notes:         row.notes ?? '',
     app_version:   row.app_version ?? undefined,
     peakFramePath: row.peak_frame_path ?? null,

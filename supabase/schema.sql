@@ -35,7 +35,7 @@ create table public.sessions (
   duration_s      integer,
   samples         integer,
   angle_timeline  jsonb,                               -- number[], ~3-4 KB per session
-  angle_mode      text,                                -- '3d' | absent = pre-3D/2D-era
+  angle_mode      text,                                -- '2d2' | '3d' = depth-estimated, reads low | absent = pre-3D/2D-era
   angle_filter    text,                                -- 'euro1' | absent = old moving average, peaks clipped
   angle_convention text,                               -- 'perjoint1' | absent = shoulder inverted, ankle offset 90
   -- Calibration state at the moment of recording. NULL means never recorded
@@ -45,6 +45,12 @@ create table public.sessions (
   -- distinction is unrecoverable once a session is saved.
   calibrated        boolean,
   calibration_offset real,                             -- degrees subtracted from each raw angle
+  -- Worst out-of-plane excursion (degrees) of either limb segment during the
+  -- recording. The angle is measured from the 2D projection, which equals the
+  -- joint angle only while the limb stays parallel to the image plane, so this
+  -- records whether that held. NULL = never measured, which is NOT the same
+  -- claim as 0 (measured, and in plane).
+  max_segment_tilt  real,
   -- HISTORICAL — nothing reads or writes this. Head redaction shipped in #15
   -- ('blur1', or 'solid1' where Canvas 2D filters were unsupported) and was
   -- removed in #17 after two on-device failures. Retained, not dropped: it is

@@ -164,8 +164,8 @@ async function main() {
     const s = saved[0]
     info(`${s.joint}/${s.side}  min=${s.min}°  max=${s.max}°  rom=${s.rom}°  samples=${s.samples}`)
 
-    if (s.angleMode === '3d') pass('angleMode: 3d — measured from world landmarks')
-    else fail(`angleMode is ${JSON.stringify(s.angleMode)}, expected '3d'`)
+    if (s.angleMode === '2d2') pass('angleMode: 2d2 — measured from the 2D image landmarks')
+    else fail(`angleMode is ${JSON.stringify(s.angleMode)}, expected '2d2'`)
 
     // Headless Chromium runs BlazePose on CPU and lands nearer 2Hz than the
     // app's 10Hz target, so assert that recording happened and report the rate

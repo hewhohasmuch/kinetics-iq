@@ -33,7 +33,7 @@ function makeSession(overrides = {}) {
     duration_s:        64,
     samples:           384,
     notes:             '',
-    angleMode:         '3d',
+    angleMode:         '2d2',
     angleFilter:       'euro1',
     angleConvention:   'perjoint1',
     calibrated:        true,

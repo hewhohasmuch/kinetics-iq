@@ -24,6 +24,13 @@ const DETECTION_INTERVAL_MS = 1000 / DETECTION_HZ
 const SNAPSHOT_MAX_EDGE = 1100   // px, longest edge
 const SNAPSHOT_QUALITY  = 0.78
 
+// Off-axis caution thresholds, in degrees of segment tilt out of the image
+// plane. WARN is where the signal first clears its own noise: at 20° a segment
+// projects only 6% short, which is inside the drift of the world landmarks the
+// tilt is derived from. CLEAR is lower so the caution does not strobe.
+const PLANE_TILT_WARN_DEG  = 25
+const PLANE_TILT_CLEAR_DEG = 20
+
 export class MeasureView {
   constructor(container, onShowHistory, onShowPatients) {
     this.container      = container
@@ -46,7 +53,12 @@ export class MeasureView {
     this._rafId         = null
     this._joint         = 'knee'
     this._side          = 'right'
-    this._position      = positionsFor('knee')[0]
+    // NOT defaulted to the first valid position. Auto-selecting one writes a
+    // clinical claim nobody made into the patient record — a standing elbow
+    // measurement saved as "Seated", the same failure the prone-shoulder fix
+    // addressed from the other direction. SessionRecorder.setContext() already
+    // keeps an absent position null; the UI has to actually give it one.
+    this._position      = null
     this._drawerOpen    = false
 
     this.currentAngle  = null
@@ -98,6 +110,13 @@ export class MeasureView {
             <span class="chip-chevron">›</span>
           </button>
 
+          <!-- Off-axis caution. Deliberately wordy and deliberately numberless:
+               the tilt it is derived from is coarse (see PoseDetector.segmentTilt),
+               so it can say "reposition" honestly but must not quote a figure. -->
+          <div id="plane-warning" class="plane-warning" style="display:none">
+            ⚠ Limb is angled toward the camera — move so the movement is side-on
+          </div>
+
           <!-- Calibration sampling progress — shown during 2s capture -->
           <div id="cal-progress" class="cal-progress" style="display:none">
             <div id="cal-bar" class="cal-bar"></div>
@@ -108,7 +127,9 @@ export class MeasureView {
           <div id="selector-drawer" class="selector-drawer" style="display:none">
             <div id="selector-handle" class="selector-handle">
               <div class="handle-grip"></div>
-              <span id="handle-label">Right Knee · Prone</span>
+              <!-- Placeholder only; _updateSelectionLabel() overwrites it as
+                   soon as the drawer is shown. Names no position on purpose. -->
+              <span id="handle-label">Right Knee</span>
               <div class="handle-chevron">›</div>
             </div>
             <div class="selector-rows">
@@ -207,6 +228,22 @@ export class MeasureView {
           object-fit: cover;
           display: block;
           touch-action: none;
+        }
+
+        .plane-warning {
+          position: absolute;
+          left: 12px;
+          right: 12px;
+          bottom: 96px;
+          padding: 9px 12px;
+          border-radius: 10px;
+          background: rgba(120, 53, 15, 0.92);
+          border: 1px solid #f59e0b;
+          color: #fde68a;
+          font-size: 13px;
+          line-height: 1.35;
+          text-align: center;
+          pointer-events: none;
         }
 
         .camera-overlay {
@@ -645,6 +682,7 @@ export class MeasureView {
     this._patientChipLabel = document.getElementById('patient-chip-label')
     this._syncDot        = document.getElementById('sync-dot')
     this._storageGauge   = document.getElementById('storage-gauge')
+    this._planeWarning   = document.getElementById('plane-warning')
     this._gaugeFill      = document.getElementById('gauge-fill')
     this._gaugeLabel     = document.getElementById('gauge-label')
 
@@ -722,6 +760,11 @@ export class MeasureView {
       this._activeControls.style.display    = 'flex'
       this._selectorDrawer.style.display    = 'block'
       this._renderPositions(this._joint)
+      // Must follow _renderPositions: until this runs the handle still shows
+      // the static placeholder from the template, which named a position
+      // ("Prone") that _position does not hold. That is the same false claim
+      // the auto-select fix exists to remove, just rendered instead of saved.
+      this._updateSelectionLabel()
       this._setStatus('running', 'Detecting pose…')
       this._startLoop()
     } catch (err) {
@@ -977,10 +1020,26 @@ export class MeasureView {
     let displayAngle = null
 
     if (allFound) {
-      // Prefer 3D world landmarks (perspective-independent); fall back to the
-      // 2D points if a frame lacks world data so a bad frame degrades, not drops.
-      const points = this.detector.getJointPoints3D(markers)
-                  ?? this.detector.getJointPoints(markers)
+      // MEASURED FROM THE 2D IMAGE POINTS, NOT THE 3D WORLD LANDMARKS.
+      //
+      // The 3D path was adopted to defeat perspective foreshortening, and it
+      // does — but it pays for that with a monocular depth estimate that is not
+      // metrically self-consistent. Measured on a right-elbow session (see
+      // CLAUDE.md), rigid bone lengths drift ~8% RMS between two frames of the
+      // same person, and the resulting angle error REVERSES SIGN across the
+      // range: +13.5 deg at the extension end, -18.4 deg at peak flexion. It
+      // read a 140 deg elbow as 115.4 deg and understated total ROM by 21%.
+      // The 2D points came within 3% of the same session's measured ROM.
+      //
+      // A sign-reversing error is also the one shape CalibrationManager.apply()
+      // — a single subtraction — provably cannot correct, which is why Set Zero
+      // is not offered as the cure.
+      //
+      // The cost of this choice is real: 2D is only the joint angle while the
+      // limb moves parallel to the image plane. That is what segmentTilt()
+      // below watches for, and it is not optional cover — it is the other half
+      // of this decision.
+      const points = this.detector.getJointPoints(markers)
       if (points) {
         const interior = jointAngle(points.proximal, points.joint, points.distal)
         if (interior !== null) {
@@ -1007,9 +1066,22 @@ export class MeasureView {
       this._updateCalProgressBar()
     }
 
+    // ── Out-of-plane guard ─────────────────────────────────────────
+    // The measured angle above comes from the 2D image points, which equal the
+    // joint angle only while the limb moves parallel to the image plane. This
+    // is the check that the assumption holds. It uses the world landmarks —
+    // the ones we no longer trust for the ANGLE — because a coarse tilt is all
+    // that is needed to catch gross off-axis filming, and comparing a segment's
+    // projection against its own 3D length needs no ground truth.
+    const tilt = allFound ? this.detector.segmentTilt(markers) : null
+    this._updatePlaneWarning(tilt)
+
     // ── Feed session recorder (calibrated angles) ──────────────────
     if (this.recorder.isActive) {
       this.recorder.record(displayAngle)
+      // Worst excursion over the whole bout, so the saved session can say the
+      // camera was off-axis even though the caution has long since cleared.
+      if (tilt !== null) this.recorder.recordTilt(tilt)
       this._updateRomBar()
     }
 
@@ -1215,6 +1287,28 @@ export class MeasureView {
    * async; called on mount, after each save, and whenever sync status changes
    * (an upload completing drops the pending count and frees cache).
    */
+  /**
+   * Show or hide the off-axis caution.
+   *
+   * THRESHOLD, and why it is not lower: below about 20° the projected
+   * shortening is under 6%, which is smaller than the landmark placement noise
+   * the tilt is computed from, so a lower threshold would fire on nothing. 25°
+   * is the first point where the signal clears its own noise floor.
+   *
+   * Hysteresis on the CLEAR edge only. Tilt hovers around the threshold when a
+   * limb sits near it, and a caution that strobes reads as a glitch and gets
+   * ignored — which is the one outcome that makes it worthless. Note this
+   * stabilises the RENDERING, never the measured value; the same rule the
+   * angle chain follows.
+   */
+  _updatePlaneWarning(tilt) {
+    if (!this._planeWarning) return
+    if (tilt === null) return                       // no world data this frame; leave as-is
+    const shown = this._planeWarning.style.display !== 'none'
+    const on    = shown ? tilt > PLANE_TILT_CLEAR_DEG : tilt > PLANE_TILT_WARN_DEG
+    this._planeWarning.style.display = on ? 'block' : 'none'
+  }
+
   async _updateStorageGauge() {
     if (!this._storageGauge) return
     const u   = await usage()
@@ -1256,11 +1350,13 @@ export class MeasureView {
     this._segJoint.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.joint === joint)
     })
-    // Offer this joint's positions and reset to the clinically typical one
-    // (first in the list). Carrying the previous joint's position over is how
-    // a shoulder ended up recorded as "prone".
+    // Offer this joint's positions with NONE selected. Carrying the previous
+    // joint's position over is how a shoulder ended up recorded as "prone";
+    // auto-selecting the first one is how a standing elbow ended up recorded
+    // as "seated". Both write a position the clinician never chose, and the
+    // record cannot tell that apart from one they did.
     this._renderPositions(joint)
-    this._selectPosition(positionsFor(joint)[0])
+    this._selectPosition(null)
     this._updateSelectionLabel()
     this.calibration.clear()
     this._updateCalibrationUI()
@@ -1303,7 +1399,9 @@ export class MeasureView {
     // the ankle dorsiflexes.
     const terms = motionTerms(this._joint)
     this._angleLabel.textContent  = `${side} ${name} ${terms.positive}`
-    this._handleLabel.textContent = `${side} ${name} · ${POSITION_NAMES[this._position]}`
+    this._handleLabel.textContent = this._position
+      ? `${side} ${name} · ${POSITION_NAMES[this._position]}`
+      : `${side} ${name} · position not set`
 
     // Name both ends of the live ROM bar. Without these the bar showed two bare
     // numbers, leaving which end was which to be inferred from their order.
