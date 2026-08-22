@@ -43,6 +43,7 @@
  */
 
 import { rawCannotGoBelowNeutral, motionTerms } from './angle.js'
+import { reportedExtremes } from './extremes.js'
 
 /**
  * @typedef {object} Provenance
@@ -161,13 +162,18 @@ export function extensionFloorCaveat(session) {
   if (!session) return null
   if (session.calibrated !== false) return null
   if (!rawCannotGoBelowNeutral(session.joint)) return null
-  if (!(session.min > 0)) return null
+
+  // The REPORTED minimum, not the raw one: this caveat is about the number the
+  // clinician is actually shown. For an unverified session the two are the same
+  // value, so this changes nothing today.
+  const { reportedMin } = reportedExtremes(session)
+  if (!(reportedMin > 0)) return null
 
   const negative = motionTerms(session.joint).negative
 
   return {
     label:  'Minimum may be measurement floor',
-    tail:   `measured raw, and the ${session.min}° minimum cannot be separated from the ` +
+    tail:   `measured raw, and the ${reportedMin}° minimum cannot be separated from the ` +
             `measurement floor, so it should not be read as an ${negative} deficit on its own.`,
     reason: `This session was recorded without a captured zero. The raw angle for this joint ` +
             `cannot go below 0°, so every landmark error at neutral is folded into apparent ` +

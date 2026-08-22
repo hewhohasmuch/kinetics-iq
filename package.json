@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "verify:e2e": "node scripts/e2e/verify.mjs"
+    "verify:e2e": "node scripts/e2e/verify.mjs",
+    "check:schema": "node scripts/check-schema.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.35",

@@ -54,6 +54,7 @@
 
 import { sessionReportModel, ATTRIBUTION } from './report.js'
 import { extremeLabels, jointLabel, formatSessionDate } from './labels.js'
+import { reportedExtremes } from './extremes.js'
 
 // US Letter in points. Portrait: a page filed alongside other chart documents.
 const PAGE = { w: 612, h: 792 }
@@ -274,7 +275,10 @@ function drawWarning(doc, y, warning) {
  * is a different fact from one whose cache was evicted while offline.
  */
 async function drawFrames(doc, y, session, images) {
-  const { maxLabel, minLabel } = extremeLabels(session.joint, session.min)
+  // The reported minimum, so a caption can never name a different motion from
+  // the stat card above it — extremeLabels decides between "Peak extension" and
+  // "Min flexion", which are claims about different things.
+  const { maxLabel, minLabel } = extremeLabels(session.joint, reportedExtremes(session).reportedMin)
   const specs = [
     { which: 'peak', caption: maxLabel, blob: images.peak ?? null },
     { which: 'min',  caption: minLabel, blob: images.min  ?? null },

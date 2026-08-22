@@ -17,7 +17,7 @@ import {
   loadOutbox, enqueueOp, removeOp, setOutboxListener,
   mergeRemoteSessions, mergeRemotePatients,
   clearAllLocalData, loadSettings,
-  migrateInlineImages, setSessionFramePath,
+  migrateInlineImages, setSessionFramePath, setSessionVerification, getDeviceId,
 } from './storage.js'
 import * as imageStore from './imageStore.js'
 import { generateId } from './id.js'
@@ -311,5 +311,120 @@ describe('migrateInlineImages', () => {
 
     expect(await migrateInlineImages()).toBe(1)
     expect(await migrateInlineImages()).toBe(0)
+  })
+})
+
+// ─── Verification: an annotation layer, never a rewrite of history ───────────
+
+describe('setSessionVerification', () => {
+
+  const record = (angles = { min: 2.1, max: 127.3 }) => ({
+    id: 'v1', at: 1700000002000, by: null, byMode: 'device', byDevice: 'dev-1',
+    landmarks: { peak: { proximal: { x: 0.1, y: 0.2, kind: 'anatomical' } }, min: null },
+    angles,
+  })
+
+  function seed(overrides = {}) {
+    const s = makeSession({
+      min: 9, max: 121.8, rom: 112.8,
+      angleTimeline: [0, 40, 97, 121.8, 100, 9],
+      landmarksRaw: { peak: { proximal: { x: 0.5, y: 0.5 } }, min: null },
+      ...overrides,
+    })
+    saveSession(s)
+    return s
+  }
+
+  it('stores the record as the single element of the array', () => {
+    const s = seed()
+    expect(setSessionVerification(s.id, record())).toBe(true)
+    const saved = loadSessions().find(x => x.id === s.id)
+    expect(saved.verifications).toHaveLength(1)
+    expect(saved.verifications[0].angles).toEqual({ min: 2.1, max: 127.3 })
+  })
+
+  it('REPLACES rather than appends — latest-wins in the UI today', () => {
+    const s = seed()
+    setSessionVerification(s.id, record({ min: 1, max: 100 }))
+    setSessionVerification(s.id, record({ min: 2, max: 110 }))
+    const saved = loadSessions().find(x => x.id === s.id)
+    expect(saved.verifications).toHaveLength(1)
+    expect(saved.verifications[0].angles).toEqual({ min: 2, max: 110 })
+  })
+
+  it('reverts to an empty array, so the session reads as model-measured again', () => {
+    const s = seed()
+    setSessionVerification(s.id, record())
+    expect(setSessionVerification(s.id, null)).toBe(true)
+    expect(loadSessions().find(x => x.id === s.id).verifications).toEqual([])
+  })
+
+  it('NEVER alters the measurement or the raw evidence', () => {
+    const s = seed()
+    setSessionVerification(s.id, record({ min: 2.1, max: 92 }))
+    const saved = loadSessions().find(x => x.id === s.id)
+
+    expect(saved.min).toBe(9)
+    expect(saved.max).toBe(121.8)
+    expect(saved.rom).toBe(112.8)
+    expect(saved.angleTimeline).toEqual([0, 40, 97, 121.8, 100, 9])
+    // landmarksRaw is the baseline the research delta is measured against
+    // forever; rewriting it would destroy the only reason to keep it.
+    expect(saved.landmarksRaw).toEqual({ peak: { proximal: { x: 0.5, y: 0.5 } }, min: null })
+  })
+
+  it('leaves angleTimeline untouched even when the verified peak is lower', () => {
+    const s = seed({ max: 100, angleTimeline: [0, 40, 97, 100, 88, 5] })
+    setSessionVerification(s.id, record({ min: 5, max: 92 }))
+    const saved = loadSessions().find(x => x.id === s.id)
+    expect(Math.max(...saved.angleTimeline)).toBe(100)
+    expect(saved.max).toBe(100)
+  })
+
+  it('queues a session upsert, deduped to one op for the session', () => {
+    // enqueueOp dedupes per entity+type by design — the save and the
+    // verification collapse into a single upsert that sync reads fresh at
+    // push time. One write, one op.
+    const s = seed()
+    setSessionVerification(s.id, record())
+    const ops = loadOutbox().filter(o => o.entity_id === s.id)
+    expect(ops).toHaveLength(1)
+    expect(ops[0].type).toBe('upsert_session')
+  })
+
+  it('bumps updated_at so the annotation wins the last-write-wins merge', () => {
+    const s = seed({ updated_at: 1 })
+    setSessionVerification(s.id, record())
+    expect(loadSessions().find(x => x.id === s.id).updated_at).toBeGreaterThan(1)
+  })
+
+  it('returns false for an unknown session without throwing', () => {
+    seed()
+    expect(setSessionVerification(generateId(), record())).toBe(false)
+  })
+
+  it('THROWS if the stored array already holds more than one element', () => {
+    // "Append-ready" is not permission to append now. Enabling history is a
+    // deliberate change to this function and to every reader of the array.
+    const s = seed({ verifications: [record(), record()] })
+    expect(() => setSessionVerification(s.id, record())).toThrow(/single-element invariant/)
+  })
+})
+
+describe('getDeviceId', () => {
+
+  it('mints a uuid on first use and returns the same one after', () => {
+    const first = getDeviceId()
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+    expect(getDeviceId()).toBe(first)
+  })
+
+  it('SURVIVES sign-out — it identifies a browser profile, not a person', () => {
+    // Deliberate: it is what lets a verification made with no account be
+    // attributed once an account signs in on this device. It must therefore
+    // never be surfaced as identifying anyone.
+    const before = getDeviceId()
+    clearAllLocalData()
+    expect(getDeviceId()).toBe(before)
   })
 })

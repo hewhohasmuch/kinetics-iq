@@ -25,6 +25,7 @@ import {
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
 import { sessionProvenance, calibrationSummary, extensionFloorCaveat } from '../core/provenance.js'
+import { reportedExtremes } from '../core/extremes.js'
 import { sessionNoteText } from '../core/report.js'
 import { resolveFrameBlob } from '../core/frames.js'
 import { exportSessionsAsPdf, canShareFile, shareFile } from './exportPdf.js'
@@ -73,11 +74,14 @@ export class SessionDetailView {
     // Stat cards. The arc leads — a knee lacking 5° of extension and one with
     // full extension subtract to the same total, and the deficit is the
     // finding, so `rom` alone cannot be the headline figure.
-    const { maxLabel, minLabel } = extremeLabels(s.joint, s.min)
-    document.getElementById('stat-rom').textContent   = romArc(s.min, s.max)
-    document.getElementById('stat-rom-total').textContent = `${s.rom}° total`
-    document.getElementById('stat-min').textContent   = `${s.min}°`
-    document.getElementById('stat-max').textContent   = `${s.max}°`
+    // What this session reports, and from where. Identical to the stored
+    // values until a clinician has verified an endpoint.
+    const e = reportedExtremes(s)
+    const { maxLabel, minLabel } = extremeLabels(s.joint, e.reportedMin)
+    document.getElementById('stat-rom').textContent   = romArc(e.reportedMin, e.reportedMax)
+    document.getElementById('stat-rom-total').textContent = `${e.reportedRom}° total`
+    document.getElementById('stat-min').textContent   = `${e.reportedMin}°`
+    document.getElementById('stat-max').textContent   = `${e.reportedMax}°`
     document.getElementById('stat-min-label').textContent = minLabel
     document.getElementById('stat-max-label').textContent = maxLabel
     document.getElementById('stat-dur').textContent  = formatDuration(s.duration_s)
@@ -244,11 +248,14 @@ export class SessionDetailView {
     // and the stat cards above them stay in step. Both captions keep the signed
     // value the overlay burned into the image — an abs() here would put two
     // different numbers on one picture.
-    const { maxLabel, minLabel } = extremeLabels(s.joint, s.min)
+    // Captions read from the same reported values as the stat cards above, so
+    // a picture and the card describing it cannot disagree about one number.
+    const e = reportedExtremes(s)
+    const { maxLabel, minLabel } = extremeLabels(s.joint, e.reportedMin)
 
     const specs = [
-      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `${maxLabel}: ${s.max}°` },
-      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `${minLabel}: ${s.min}°` },
+      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `${maxLabel}: ${e.reportedMax}°` },
+      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `${minLabel}: ${e.reportedMin}°` },
     ]
 
     let shown = 0

@@ -6,7 +6,7 @@
  * so no network or localStorage is involved.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 vi.mock('./supabase.js', () => ({
   getClient:  vi.fn(),
@@ -35,7 +35,7 @@ import { getClient, getUserId } from './supabase.js'
 import * as storage from './storage.js'
 import * as imageStore from './imageStore.js'
 import {
-  processOutbox, pullAll,
+  processOutbox, pullAll, getStatus,
   sessionToRow, rowToSession, patientToRow, rowToPatient,
 } from './sync.js'
 import { generateId } from './id.js'
@@ -534,5 +534,168 @@ describe('shape mapping', () => {
     const back = rowToSession(sessionToRow(original))
     expect(back.calibrated).toBe(false)
     expect(back.calibrationOffset).toBe(0)
+  })
+})
+
+// ─── Landmark evidence + verification round trip (0006) ──────────────────────
+//
+// Each field is pinned in BOTH directions separately. A half-fix still loses
+// the stamp, and the failure is silent: the session comes back looking like one
+// that never captured evidence, or with a clinician's verification discarded.
+
+describe('landmark evidence and verification mapping', () => {
+
+  const verification = {
+    id: 'v1', at: 1700000002000, by: 'user-123', byMode: 'account',
+    byDevice: 'device-abc',
+    landmarks: { peak: { proximal: { x: 0.1, y: 0.2, kind: 'anatomical' } }, min: null },
+    angles: { max: 127.3, min: 2.1 },
+    modelId: 'blazepose-full', modelVersion: 'tasks-vision@0.10.x',
+  }
+
+  const populated = {
+    landmarkSpace: 'video1',
+    modelId: 'blazepose-full',
+    modelVersion: 'tasks-vision@0.10.x',
+    landmarksRaw: { peak: { proximal: { x: 0.1, y: 0.2 } }, min: null },
+    frameAngleRawMax: 126.9,
+    frameAngleRawMin: 1.8,
+    frameTiltMax: 12.4,
+    frameTiltMin: 3.1,
+    verifications: [verification],
+  }
+
+  const pairs = [
+    ['landmarkSpace',    'landmark_space',      'video1'],
+    ['modelId',          'model_id',            'blazepose-full'],
+    ['modelVersion',     'model_version',       'tasks-vision@0.10.x'],
+    ['frameAngleRawMax', 'frame_angle_raw_max', 126.9],
+    ['frameAngleRawMin', 'frame_angle_raw_min', 1.8],
+    ['frameTiltMax',     'frame_tilt_max',      12.4],
+    ['frameTiltMin',     'frame_tilt_min',      3.1],
+  ]
+
+  it.each(pairs)('sends %s as %s', (camel, snake, value) => {
+    expect(sessionToRow(makeSession(populated))[snake]).toEqual(value)
+  })
+
+  it.each(pairs)('reads %s back from %s', (camel, snake, value) => {
+    expect(rowToSession({ ...sessionToRow(makeSession(populated)) })[camel]).toEqual(value)
+  })
+
+  it('sends the whole verification record as one value', () => {
+    const row = sessionToRow(makeSession(populated))
+    expect(row.verifications).toEqual([verification])
+  })
+
+  it('reads the verification back with its attribution intact', () => {
+    const back = rowToSession(sessionToRow(makeSession(populated)))
+    expect(back.verifications).toEqual([verification])
+    expect(back.verifications[0].by).toBe('user-123')
+    expect(back.verifications[0].byMode).toBe('account')
+    expect(back.verifications[0].byDevice).toBe('device-abc')
+  })
+
+  it('sends landmarksRaw and reads it back unchanged', () => {
+    const row = sessionToRow(makeSession(populated))
+    expect(row.landmarks_raw).toEqual(populated.landmarksRaw)
+    expect(rowToSession(row).landmarksRaw).toEqual(populated.landmarksRaw)
+  })
+
+  it('keeps absent stamps ABSENT, not null — absence marks a pre-feature session', () => {
+    const back = rowToSession(sessionToRow(makeSession()))
+    expect(back.landmarkSpace).toBeUndefined()
+    expect(back.modelId).toBeUndefined()
+    expect(back.modelVersion).toBeUndefined()
+  })
+
+  it('keeps never-verified as null, distinct from a populated array', () => {
+    const back = rowToSession(sessionToRow(makeSession()))
+    expect(back.verifications).toBeNull()
+    expect(back.landmarksRaw).toBeNull()
+  })
+
+  it('preserves an EMPTY verification array as reverted, not as never-verified', () => {
+    const row = sessionToRow(makeSession({ verifications: [] }))
+    expect(row.verifications).toEqual([])
+    expect(rowToSession(row).verifications).toEqual([])
+  })
+
+  it('survives a measured tilt of exactly 0 as 0, not as never-measured', () => {
+    // 0 is the positive claim that the frame was in plane. `|| null` here would
+    // silently downgrade it to "never measured", a different fact.
+    const row = sessionToRow(makeSession({ frameTiltMax: 0, frameTiltMin: 0 }))
+    expect(row.frame_tilt_max).toBe(0)
+    expect(rowToSession(row).frameTiltMax).toBe(0)
+    expect(rowToSession(row).frameTiltMin).toBe(0)
+  })
+
+  it('survives a full local → remote → local round trip', () => {
+    const before = makeSession(populated)
+    const after  = rowToSession(sessionToRow(before))
+    for (const [camel] of pairs) expect(after[camel]).toEqual(before[camel])
+    expect(after.verifications).toEqual(before.verifications)
+    expect(after.landmarksRaw).toEqual(before.landmarksRaw)
+  })
+})
+
+// ─── The deploy guard: schema mismatch vs a genuine rejection ────────────────
+
+describe('schema mismatch (code deployed ahead of its migration)', () => {
+
+  async function drainOnce(error) {
+    const session = makeSession()
+    storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'upsert_session', entity_id: session.id }])
+    storage.loadSessions.mockReturnValue([session])
+    getClient.mockReturnValue(fakeClient({ upsert: () => ({ error }) }))
+    await processOutbox()
+  }
+
+  afterEach(async () => {
+    // _schemaMismatch is sticky module state by design — a successful push is
+    // what clears it, so reset through the real path rather than reaching in.
+    await drainOnce(null)
+  })
+
+  it('RETAINS the op on PGRST204 instead of dropping it', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await drainOnce({ code: 'PGRST204', message: "Could not find the 'verifications' column" })
+    expect(storage.removeOp).not.toHaveBeenCalled()
+    err.mockRestore()
+  })
+
+  it('RETAINS the op on a raw 42703 undefined_column', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await drainOnce({ code: '42703', message: 'column "verifications" does not exist' })
+    expect(storage.removeOp).not.toHaveBeenCalled()
+    err.mockRestore()
+  })
+
+  it('raises a LOUD, visible state rather than retrying in silence', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await drainOnce({ code: 'PGRST204', message: 'missing column' })
+
+    expect(getStatus().schemaMismatch).toBe(true)
+    expect(getStatus().state).toBe('schema_mismatch')
+    expect(err.mock.calls.flat().join(' ')).toMatch(/migration/i)
+    err.mockRestore()
+  })
+
+  it('still DROPS a genuine RLS rejection — the two must not be conflated', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await drainOnce({ code: '42501', message: 'RLS violation' })
+    expect(storage.removeOp).toHaveBeenCalledWith('op1')
+    expect(getStatus().schemaMismatch).toBe(false)
+    warn.mockRestore()
+  })
+
+  it('clears the alarm once a push succeeds', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await drainOnce({ code: 'PGRST204', message: 'missing column' })
+    expect(getStatus().schemaMismatch).toBe(true)
+    err.mockRestore()
+
+    await drainOnce(null)
+    expect(getStatus().schemaMismatch).toBe(false)
   })
 })

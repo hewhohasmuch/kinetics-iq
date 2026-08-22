@@ -58,6 +58,31 @@ create table public.sessions (
   -- is the question an audit of the image store would ask. Sessions outside
   -- that window are NULL and their snapshots show the patient's face.
   face_redaction  text,
+  -- ── Landmark evidence + clinician-verified endpoint observations (0006) ────
+  -- Immutable raw evidence, written once at capture. landmarks_raw is the
+  -- baseline the research delta is measured against, forever.
+  landmark_space  text,                                -- 'video1' | absent = pre-landmark-capture, NOT verifiable
+  model_id        text,
+  model_version   text,
+  landmarks_raw   jsonb,                               -- {peak,min}: {proximal,joint,distal} normalized + kind
+  -- UNFILTERED angle recomputed from landmarks_raw — deliberately not min/max,
+  -- which are filtered and calibrated. The delta must compare like with like.
+  frame_angle_raw_max real,
+  frame_angle_raw_min real,
+  -- Per-frame out-of-plane tilt AT EACH EXTREME. max_segment_tilt is the
+  -- session-level worst and cannot say whether the verified frame was off-axis.
+  -- NULL = never measured; 0 = measured and in plane.
+  frame_tilt_max  real,
+  frame_tilt_min  real,
+  -- Clinician-verified ENDPOINT OBSERVATIONS. An annotation layer: this never
+  -- rewrites min/max/rom/angle_timeline. A verified peak is not a recomputed
+  -- timeline maximum. NULL or '[]' = NEVER VERIFIED, which is not the same
+  -- claim as "verified and unchanged". Array holds at most one element today;
+  -- the shape exists so history is a later change inside jsonb, not a
+  -- migration. See 0006 for the element shape and the attribution rules —
+  -- notably that by/by_mode/by_device record WHO and IN WHAT MODE, never that
+  -- the verifier was qualified. This app has no role model.
+  verifications   jsonb,
   notes           text default '',
   app_version     text,
   peak_frame_path text,                                -- Storage path: max-flexion snapshot

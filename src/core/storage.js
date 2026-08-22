@@ -141,6 +141,62 @@ export function setSessionFramePath(sessionId, which, path) {
 }
 
 /**
+ * Write (or clear) the clinician-verified endpoint observation for a session.
+ *
+ * VERIFICATION IS AN ANNOTATION LAYER. This never writes `min`, `max`, `rom`,
+ * `angleTimeline` or `landmarksRaw`. `landmarksRaw` in particular is the
+ * immutable baseline the research delta is measured against forever, and a
+ * verification that rewrote it would destroy the only reason to keep it.
+ *
+ * ONE WRITE. The whole record goes into a single `verifications` value, so a
+ * half-saved verification — landmarks without an angle, angles without
+ * attribution — is not representable rather than merely unlikely.
+ *
+ * THE ARRAY HOLDS AT MOST ONE ELEMENT TODAY, and that is asserted below. The
+ * shape is an array so full history becomes a change inside jsonb instead of a
+ * migration; "append-ready" is NOT permission to append now. When history is
+ * enabled, Revert should become an appended tombstone event rather than a
+ * deletion — deleting would defeat the reason the column is an array.
+ *
+ * @param {string} sessionId
+ * @param {object|null} record - the verification, or null to revert
+ * @returns {boolean}
+ * @throws {Error} if the stored array already violates the single-element rule
+ */
+export function setSessionVerification(sessionId, record) {
+  // Outside the try: this is a programmer error, not a storage failure, and it
+  // must not be swallowed into a `false` return that reads as "disk problem".
+  const existing = loadSessions().find(s => s.id === sessionId)?.verifications
+  if (Array.isArray(existing) && existing.length > 1) {
+    throw new Error(
+      `Session ${sessionId} holds ${existing.length} verifications; the ` +
+      `single-element invariant is broken. Enabling history is a deliberate ` +
+      `change to this function and to every reader of the array.`
+    )
+  }
+
+  try {
+    const raw = localStorage.getItem(KEYS.SESSIONS)
+    if (!raw) return false
+    const sessions = JSON.parse(raw)
+    const idx = sessions.findIndex(s => s.id === sessionId)
+    if (idx === -1) return false
+
+    // Revert empties the layer, so the session reads as model-measured again.
+    // `[]` and null are the same claim here — never verified.
+    const verifications = record === null ? [] : [record]
+
+    sessions[idx] = { ...sessions[idx], verifications, updated_at: Date.now() }
+    localStorage.setItem(KEYS.SESSIONS, JSON.stringify(sessions))
+    enqueueOp({ type: 'upsert_session', entity_id: sessionId })
+    return true
+  } catch (e) {
+    console.error('Failed to set session verification:', e)
+    return false
+  }
+}
+
+/**
  * Clear ALL sessions locally. Used for testing / reset / sign-out.
  * Does not queue cloud deletes — cloud data is untouched.
  */
@@ -455,6 +511,9 @@ const DEFAULT_SETTINGS = {
     distal:   2,
   },
   active_patient_id: null,
+  // Pseudonymous per-browser-profile id, minted on first use by getDeviceId().
+  // Identifies a DEVICE, never a person, and deliberately outlives sign-out.
+  device_id: null,
   // Put the patient's initials in an exported PDF's FILENAME (never on the
   // page). Defaults on because a file with no identifier at all is the easier
   // one to mis-file into the wrong chart, and mis-filing is the worse incident.
@@ -494,4 +553,27 @@ export function saveSettings(updates) {
     console.error('Failed to save settings:', e)
     return false
   }
+}
+
+/**
+ * A stable pseudonymous id for this browser profile, created on first use.
+ *
+ * WHAT IT IS FOR: attaching to a verification in BOTH account and device mode.
+ * Without it, a verification made with no account is orphaned forever; with it,
+ * such a record can later be attributed to whichever account signs in here.
+ *
+ * IT IDENTIFIES A BROWSER PROFILE, NEVER A PERSON. It deliberately survives
+ * sign-out — clearAllLocalData() resets only active_patient_id and
+ * calibration_offset — so on a shared iPad the same id spans different
+ * clinicians. That is correct for a device id and is exactly why it must never
+ * be surfaced as identifying anyone, and why `by`/`byMode` carry the person.
+ *
+ * @returns {string} uuid
+ */
+export function getDeviceId() {
+  const existing = loadSettings().device_id
+  if (existing) return existing
+  const id = generateId()
+  saveSettings({ device_id: id })
+  return id
 }
