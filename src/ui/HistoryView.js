@@ -35,6 +35,7 @@ import {
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
 import { sessionProvenance, extensionFloorCaveat } from '../core/provenance.js'
+import { reportedExtremes } from '../core/extremes.js'
 import { exportSessionsAsPdf } from './exportPdf.js'
 import { Chart } from 'chart.js/auto'
 
@@ -262,7 +263,7 @@ export class HistoryView {
         datasets: [
           {
             label: `Peak ${motion.toLowerCase()}`,
-            data: chartData.map(s => s.max),
+            data: chartData.map(s => reportedExtremes(s).reportedMax),
             borderColor: '#4ade80',
             backgroundColor: 'rgba(74, 222, 128, 0.10)',
             borderWidth: 2,
@@ -275,7 +276,7 @@ export class HistoryView {
           },
           {
             label: 'Minimum',
-            data: chartData.map(s => s.min),
+            data: chartData.map(s => reportedExtremes(s).reportedMin),
             borderColor: '#60a5fa',
             borderWidth: 2,
             borderDash: [4, 3],
@@ -404,6 +405,10 @@ export class HistoryView {
       ? `<span class="legacy-badge" title="${floor.reason}">⚠ ${floor.label}</span>`
       : ''
 
+    // The row leads with these numbers, so they come from the same accessor
+    // the detail view and the exports use.
+    const e = reportedExtremes(session)
+
     const selected = this._selected.has(session.id)
 
     return `
@@ -415,8 +420,8 @@ export class HistoryView {
           ${session.notes ? `<div class="session-notes">${session.notes}</div>` : ''}
         </div>
         <div class="session-stats">
-          <div class="stat-rom">${romArc(session.min, session.max)}</div>
-          <div class="stat-range">${session.rom}° total</div>
+          <div class="stat-rom">${romArc(e.reportedMin, e.reportedMax)}</div>
+          <div class="stat-range">${e.reportedRom}° total</div>
         </div>
         <div class="row-chevron">›</div>
         <button class="btn-delete" data-id="${session.id}" aria-label="Delete session">

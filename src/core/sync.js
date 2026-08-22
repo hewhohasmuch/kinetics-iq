@@ -35,6 +35,10 @@ const IMAGE_BUCKET = 'session-images'
 let _running   = false
 let _queued    = false   // a trigger fired while a sync was in flight
 let _listeners = []
+// Set when the server rejects a write for naming a column it does not have —
+// i.e. the code was deployed before its migration. Sticky until a push
+// succeeds, because the condition persists until someone applies the SQL.
+let _schemaMismatch = false
 
 // ─── Status pub-sub ───────────────────────────────────────────────────────────
 
@@ -44,8 +48,9 @@ let _listeners = []
  */
 export function getStatus() {
   const pendingCount = loadOutbox().length
-  if (!_isOnline()) return { state: 'offline', pendingCount }
-  return { state: pendingCount > 0 ? 'pending' : 'synced', pendingCount }
+  if (_schemaMismatch) return { state: 'schema_mismatch', pendingCount, schemaMismatch: true }
+  if (!_isOnline()) return { state: 'offline', pendingCount, schemaMismatch: false }
+  return { state: pendingCount > 0 ? 'pending' : 'synced', pendingCount, schemaMismatch: false }
 }
 
 /**
@@ -127,7 +132,25 @@ export async function processOutbox() {
     const { error, missing } = await _pushOp(op)
 
     if (missing) { removeOp(op.id); continue }   // entity deleted locally since queueing
-    if (!error)  { removeOp(op.id); _notifyStatus(); continue }
+    if (!error)  { removeOp(op.id); _schemaMismatch = false; _notifyStatus(); continue }
+
+    // A missing column is a DEPLOY FAULT, not a rejection of the data, and it
+    // is checked before the generic retry test so the alarm is raised. Dropping
+    // the op here — which is what happened before this branch existed — loses
+    // the record permanently and silently: the migration gets applied later,
+    // everything looks healthy, and the session simply never reaches the cloud.
+    if (_isSchemaMismatch(error)) {
+      if (!_schemaMismatch) {
+        console.error(
+          `Sync halted: the database is missing a column this build writes (${error.code}). ` +
+          `Apply the pending migration in supabase/migrations. ` +
+          `Ops are RETAINED and will drain once the schema matches.`
+        )
+      }
+      _schemaMismatch = true
+      _notifyStatus()
+      return   // keep op, stop the drain
+    }
 
     if (_isRetryable(error)) return   // keep op, stop the drain, retry later
     // Permanent rejection — drop the op. Ids only, never record contents.
@@ -191,12 +214,27 @@ async function _pushOp(op) {
   }
 }
 
+// PostgREST returns PGRST204 when a payload names a column the schema cache
+// does not have; the database itself raises 42703 (undefined_column). Both mean
+// THE CODE IS AHEAD OF THE MIGRATION — a condition that fixes itself the moment
+// the SQL is applied, which is exactly what makes them retryable.
+//
+// This is categorically different from an RLS 403, which is a legitimate
+// rejection that will never succeed. Keep the two apart: widening this to "any
+// 4xx is retryable" would make genuinely rejected ops retry forever.
+const SCHEMA_MISMATCH_CODES = new Set(['PGRST204', '42703'])
+
+function _isSchemaMismatch(error) {
+  return SCHEMA_MISMATCH_CODES.has(error?.code)
+}
+
 function _isRetryable(error) {
   // supabase-js surfaces network failures as fetch TypeErrors without a
   // PostgREST code; anything with a code reached the server and won't
-  // succeed on retry.
+  // succeed on retry — EXCEPT a schema mismatch, which is a deploy fault.
   if (error.retry) return true   // explicit transient signal (e.g. no cached session yet)
   if (!_isOnline()) return true
+  if (_isSchemaMismatch(error)) return true
   return !error.code && /fetch|network|load failed/i.test(error.message ?? '')
 }
 
@@ -255,6 +293,23 @@ export function sessionToRow(s) {
     // plane; this says whether it did. Dropping it in the round-trip would
     // bring the session back claiming that was never checked.
     max_segment_tilt:   s.maxSegmentTilt ?? null,
+    // ── Landmark evidence + verification (0006) ──────────────────────────────
+    // Same rule as every stamp above: if these do not travel, a cloud pull
+    // brings the session back claiming evidence was never captured, and a
+    // clinician's verification is silently discarded. `landmarks_raw` is the
+    // immutable baseline the research delta is measured against — it is
+    // written once at capture and must never be rewritten from here.
+    landmark_space:      s.landmarkSpace ?? null,
+    model_id:            s.modelId ?? null,
+    model_version:       s.modelVersion ?? null,
+    landmarks_raw:       s.landmarksRaw ?? null,
+    frame_angle_raw_max: s.frameAngleRawMax ?? null,
+    frame_angle_raw_min: s.frameAngleRawMin ?? null,
+    // `?? null` and not `|| null`: a measured tilt of exactly 0 is the positive
+    // claim that the frame was in plane, and must survive as 0.
+    frame_tilt_max:      s.frameTiltMax ?? null,
+    frame_tilt_min:      s.frameTiltMin ?? null,
+    verifications:       s.verifications ?? null,
     notes:          s.notes ?? '',
     app_version:    s.app_version ?? null,
     peak_frame_path: s.peakFramePath ?? null,
@@ -294,6 +349,22 @@ export function rowToSession(row) {
     // same claim on both sides of the wire here, and 0 would assert the limb
     // was checked and found in plane.
     maxSegmentTilt:    row.max_segment_tilt ?? null,
+    // ── Landmark evidence + verification (0006) ──────────────────────────────
+    // `undefined` for the three stamps: their ABSENCE is what marks a session
+    // recorded before landmark capture existed, which is not verifiable and
+    // whose stored image is the legacy baked composite.
+    landmarkSpace:    row.landmark_space ?? undefined,
+    modelId:          row.model_id ?? undefined,
+    modelVersion:     row.model_version ?? undefined,
+    // `null` for the rest: null is the same claim on both sides of the wire.
+    // For `verifications`, null/[] means NEVER VERIFIED — never "verified and
+    // found unchanged", and no consumer may collapse the two.
+    landmarksRaw:     row.landmarks_raw ?? null,
+    frameAngleRawMax: row.frame_angle_raw_max ?? null,
+    frameAngleRawMin: row.frame_angle_raw_min ?? null,
+    frameTiltMax:     row.frame_tilt_max ?? null,
+    frameTiltMin:     row.frame_tilt_min ?? null,
+    verifications:    row.verifications ?? null,
     notes:         row.notes ?? '',
     app_version:   row.app_version ?? undefined,
     peakFramePath: row.peak_frame_path ?? null,

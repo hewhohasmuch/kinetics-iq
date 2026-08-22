@@ -51,6 +51,7 @@ import {
   formatDuration,
 } from './labels.js'
 import { sessionProvenance, calibrationSummary, extensionFloorCaveat } from './provenance.js'
+import { reportedExtremes } from './extremes.js'
 
 /** The trailing attribution, shared by every rendering of a session. */
 export const ATTRIBUTION = 'Measured with KineticsIQ'
@@ -89,7 +90,13 @@ export function sessionReportModel(session) {
 
   // Named per joint and per side of zero, from the same helper the stat cards
   // and snapshot captions use. Values stay signed.
-  const { maxLabel, minLabel } = extremeLabels(s.joint, s.min)
+  // Which numbers this session reports, and from where. For an unverified
+  // session these are the stored values unchanged, so adopting the accessor is
+  // behaviour-free; once a clinician has verified an endpoint they are that
+  // observation instead.
+  const { reportedMin, reportedMax, reportedRom } = reportedExtremes(s)
+
+  const { maxLabel, minLabel } = extremeLabels(s.joint, reportedMin)
 
   const prov  = sessionProvenance(s)
   const notes = String(s.notes ?? '').trim()
@@ -111,12 +118,12 @@ export function sessionReportModel(session) {
 
     // The arc is the finding; the total is secondary. A knee lacking 5° of
     // extension and one with full extension subtract to the same total.
-    romLine: `ROM ${romArc(s.min, s.max)} (${s.rom}° total)`,
+    romLine: `ROM ${romArc(reportedMin, reportedMax)} (${reportedRom}° total)`,
 
     maxLabel,
-    maxValue: `${s.max}°`,
+    maxValue: `${reportedMax}°`,
     minLabel,
-    minValue: `${s.min}°`,
+    minValue: `${reportedMin}°`,
 
     durationLine: `Duration ${formatDuration(s.duration_s)}, ${s.samples} samples`,
 
