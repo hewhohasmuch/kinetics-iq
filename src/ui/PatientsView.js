@@ -77,6 +77,13 @@ export class PatientsView {
           // blobs in IndexedDB — so anything that hasn't reached the cloud yet
           // would be lost forever. Drain first, then refuse while ops remain OR
           // any snapshot is still un-uploaded (its only copy is on this device).
+          //
+          // A CLINICIAN'S VERIFICATION IS IN SCOPE HERE, and is covered without
+          // a separate check: setSessionVerification() enqueues an
+          // upsert_session op, so an unsynced one is counted by pendingCount.
+          // It is exactly as unrecoverable as an un-uploaded snapshot — a
+          // judgement made by hand that exists in one place — so do not narrow
+          // this check to images.
           await syncNow()
           const { pendingCount } = getStatus()
           const pendingImages = (await listPending()).length

@@ -286,3 +286,82 @@ describe('sessionReportModel — the shared source of both renderings', () => {
   })
 
 })
+
+// ─── Verification reaches the note (PR 3) ────────────────────────────────────
+
+describe('verification in the report model', () => {
+
+  const verifiedSession = (angles) => makeSession({
+    verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles }],
+  })
+
+  it('carries a verification field on every session, model-measured included', () => {
+    // Mentioning it only when it happened would leave the reader guessing what
+    // silence meant.
+    expect(sessionReportModel(makeSession()).verification.level).toBe('model')
+    expect(sessionReportModel(verifiedSession({ min: 2, max: 130 })).verification.level).toBe('clinician')
+  })
+
+  it('keeps verification OUT of warnings — it is an upgrade, not a defect', () => {
+    const m = sessionReportModel(verifiedSession({ min: 2, max: 130 }))
+    expect(m.warnings.some(w => /verif/i.test(w.label))).toBe(false)
+  })
+
+  it('states it on the note for a model-measured session too', () => {
+    expect(lines(makeSession()).some(l => /Model-measured/.test(l))).toBe(true)
+  })
+
+  it('names the mode without naming a person', () => {
+    const text = sessionNoteText(verifiedSession({ min: 2, max: 130 }))
+    expect(text).toMatch(/no account/)
+    expect(text).toMatch(/Clinician-verified/)
+  })
+
+  it('ATTRIBUTES a ROM derived from verified endpoints', () => {
+    // ROM between verified endpoints is a different quantity from ROM across
+    // the raw timeline and can legitimately be narrower — printing it
+    // unattributed would read as the same measurement having improved.
+    const m = sessionReportModel(verifiedSession({ min: 10, max: 100 }))
+    expect(m.romAttribution).toMatch(/clinician-verified endpoints/)
+    expect(m.romLine).toMatch(/10° – 100°/)
+  })
+
+  it('keeps the qualifier OUT of the headline, which cannot wrap', () => {
+    // The PDF draws romLine at 24pt with no wrapping, so anything appended
+    // there runs off the page. This shipped truncated once.
+    const m = sessionReportModel(verifiedSession({ min: 10, max: 100 }))
+    expect(m.romLine).not.toMatch(/verified/)
+    expect(m.romLine.length).toBeLessThan(40)
+  })
+
+  it('states the qualifier in the note, next to the figure it qualifies', () => {
+    const l = lines(verifiedSession({ min: 10, max: 100 }))
+    const romAt = l.findIndex(x => /^ROM /.test(x))
+    expect(romAt).toBeGreaterThanOrEqual(0)
+    expect(l[romAt + 1]).toMatch(/clinician-verified endpoints/)
+  })
+
+  it('leaves the ROM line unattributed when nothing was verified', () => {
+    const m = sessionReportModel(makeSession())
+    expect(m.romLine).not.toMatch(/verified/)
+    expect(m.romAttribution).toBeNull()
+  })
+
+  it('reports the verified numbers, not the stored ones', () => {
+    const m = sessionReportModel(verifiedSession({ min: 10, max: 100 }))
+    expect(m.maxValue).toBe('100°')
+    expect(m.minValue).toBe('10°')
+  })
+
+  it('NEVER strengthens the claim anywhere in the note', () => {
+    for (const s of [makeSession(), verifiedSession({ min: 2, max: 130 })]) {
+      const text = sessionNoteText(s).toLowerCase()
+      expect(text).not.toMatch(/validated|corrected|accurate/)
+    }
+  })
+
+  it('still carries no patient identifier once verification is added', () => {
+    const text = sessionNoteText(verifiedSession({ min: 2, max: 130 }))
+    expect(text).not.toMatch(/MRN|dob|Poppins/i)
+  })
+})

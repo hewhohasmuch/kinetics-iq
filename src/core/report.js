@@ -50,7 +50,7 @@ import {
   formatSessionTime,
   formatDuration,
 } from './labels.js'
-import { sessionProvenance, calibrationSummary, extensionFloorCaveat } from './provenance.js'
+import { sessionProvenance, calibrationSummary, extensionFloorCaveat, verificationSummary } from './provenance.js'
 import { reportedExtremes } from './extremes.js'
 
 /** The trailing attribution, shared by every rendering of a session. */
@@ -73,9 +73,10 @@ export const ATTRIBUTION = 'Measured with KineticsIQ'
  *
  * @param {Session} session
  * @returns {{
- *   heading: string, dateLine: string, romLine: string,
+ *   heading: string, dateLine: string, romLine: string, romAttribution: string|null,
  *   maxLabel: string, maxValue: string, minLabel: string, minValue: string,
  *   durationLine: string, calibrationLine: string,
+ *   verification: {level: string, label: string, detail: string, attribution: string|null},
  *   warnings: Array<{level: string, label: string, tail: string}>,
  *   notes: string|null, attribution: string,
  * }}
@@ -94,12 +95,19 @@ export function sessionReportModel(session) {
   // session these are the stored values unchanged, so adopting the accessor is
   // behaviour-free; once a clinician has verified an endpoint they are that
   // observation instead.
-  const { reportedMin, reportedMax, reportedRom } = reportedExtremes(s)
+  const e = reportedExtremes(s)
+  const { reportedMin, reportedMax, reportedRom } = e
 
   const { maxLabel, minLabel } = extremeLabels(s.joint, reportedMin)
 
   const prov  = sessionProvenance(s)
   const notes = String(s.notes ?? '').trim()
+
+  // NOT a warning, and deliberately not part of `warnings`: clinician
+  // verification is an upgrade, and `warnings` is a list of defects that the
+  // PDF paints amber. This gets its own field so one computation reaches the
+  // History badge, the SessionDetail chip, the note and the PDF at once.
+  const verification = verificationSummary(s)
 
   // Provenance leads: it invalidates the numbers outright, where the floor
   // caveat qualifies one of them. Both can apply to the same session.
@@ -118,7 +126,19 @@ export function sessionReportModel(session) {
 
     // The arc is the finding; the total is secondary. A knee lacking 5° of
     // extension and one with full extension subtract to the same total.
+    // The headline stays SHORT. It is drawn at 24pt in the PDF with no
+    // wrapping, so anything appended here runs straight off the page — which
+    // is exactly what an earlier version of this did.
     romLine: `ROM ${romArc(reportedMin, reportedMax)} (${reportedRom}° total)`,
+
+    // The qualifier travels as its own field for the same reason `warnings`
+    // carries no glyph: the two media place it differently — the note as the
+    // next line, the PDF as small type under the number. ROM between verified
+    // endpoints is a DIFFERENT QUANTITY from ROM across the raw timeline and
+    // can legitimately be narrower, so the figure must never stand unqualified.
+    romAttribution: e.endpointsOnly
+      ? 'Range is between clinician-verified endpoints, not across the whole recording'
+      : null,
 
     maxLabel,
     maxValue: `${reportedMax}°`,
@@ -130,6 +150,8 @@ export function sessionReportModel(session) {
     // Always present, including the "not recorded" case: a report that silently
     // omits whether this was a raw or a zeroed measurement is claiming neither.
     calibrationLine: calibrationSummary(s).text,
+
+    verification,
 
     // The most important field when it is non-empty. Entries carry no glyph
     // and no markup — each rendering marks them however its medium supports,
@@ -160,11 +182,19 @@ export function sessionNoteText(session) {
     m.heading,
     m.dateLine,
     m.romLine,
+    ...(m.romAttribution ? [m.romAttribution] : []),
     `${m.maxLabel} ${m.maxValue}`,
     `${m.minLabel} ${m.minValue}`,
     m.durationLine,
     m.calibrationLine,
   ]
+
+  // Stated on every session, model-measured included: a note that mentions
+  // verification only when it happened would leave the reader guessing what
+  // silence meant.
+  lines.push(m.verification.attribution
+    ? `${m.verification.label} — ${m.verification.attribution}`
+    : m.verification.label)
 
   // Prefixed with a glyph rather than any markup, so it survives a paste into a
   // plain-text note field. (The PDF cannot use this character — see pdf.js.)

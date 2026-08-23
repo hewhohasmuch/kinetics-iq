@@ -24,11 +24,17 @@ import {
   extremeLabels, jointLabel, positionLabel, romArc, motionLabel,
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
-import { sessionProvenance, calibrationSummary, extensionFloorCaveat } from '../core/provenance.js'
+import { sessionProvenance, calibrationSummary, extensionFloorCaveat, verificationSummary } from '../core/provenance.js'
 import { reportedExtremes } from '../core/extremes.js'
 import { sessionNoteText } from '../core/report.js'
 import { resolveFrameBlob } from '../core/frames.js'
-import { renderFrame, frameLandmarks } from '../core/frameRender.js'
+import { renderFrame, frameLandmarks, hasRenderableLandmarks } from '../core/frameRender.js'
+import { buildVerification, recomputeAngle } from '../core/landmarks.js'
+import { setSessionVerification, getDeviceId } from '../core/storage.js'
+import { currentVerification } from '../core/extremes.js'
+import { editLandmarks } from './LandmarkEditor.js'
+import { getUserId } from '../core/supabase.js'
+import { generateId } from '../core/id.js'
 import { exportSessionsAsPdf, canShareFile, shareFile } from './exportPdf.js'
 import { Chart } from 'chart.js/auto'
 
@@ -154,6 +160,15 @@ export class SessionDetailView {
     parts.push(
       `<span class="prov-chip${cal.known ? '' : ' unknown'}">${cal.text}</span>`
     )
+
+    // Neutral, and only when something was actually verified — a chip on every
+    // session announcing the default would train the eye to skip the row.
+    const ver = verificationSummary(s)
+    if (ver.level === 'clinician') {
+      parts.push(
+        `<span class="prov-chip verified" title="${ver.detail} ${ver.attribution ?? ''}">✓ ${ver.label}</span>`
+      )
+    }
 
     const prov = sessionProvenance(s)
     if (prov.level !== 'ok') {
@@ -282,6 +297,93 @@ export class SessionDetailView {
 
     if (shown === 1) framesEl.querySelector('.rom-frames').classList.add('single')
     if (shown > 0)   framesEl.style.display = 'block'
+
+    this._wireVerifyControls(s)
+  }
+
+  /**
+   * Show and wire the verify controls.
+   *
+   * Only a session that stored landmarks can be verified: a legacy frame is a
+   * baked composite with no coordinates behind it, and offering to edit one
+   * would promise something the record cannot keep.
+   */
+  _wireVerifyControls(s) {
+    const canVerify = hasRenderableLandmarks(s)
+
+    for (const btn of document.querySelectorAll('.btn-verify')) {
+      const which = btn.dataset.which
+      const fig = document.getElementById(which === 'peak' ? 'frame-max' : 'frame-min')
+      const usable = canVerify && Boolean(frameLandmarks(s, which)) && fig?.style.display !== 'none'
+      btn.style.display = usable ? 'block' : 'none'
+      if (usable) btn.onclick = () => this._openEditor(s, which)
+    }
+
+    const un = document.getElementById('btn-unverify')
+    if (un) {
+      un.style.display = currentVerification(s) ? 'block' : 'none'
+      un.onclick = () => this._removeVerification(s)
+    }
+  }
+
+  /**
+   * Open the editor for one frame and persist what comes back.
+   *
+   * THE OTHER END IS PRESERVED. A verification is one record covering both
+   * endpoints, so verifying the peak must not silently discard a minimum that
+   * was verified earlier — it is rebuilt from the existing record.
+   */
+  async _openEditor(s, which) {
+    const blob = await resolveFrameBlob(s.id, which, which === 'peak' ? s.peakFramePath : s.minFramePath)
+    if (!blob) return
+
+    const existing = currentVerification(s)
+    const rawSet = s.landmarksRaw?.[which] ?? null
+    const startSet = existing?.landmarks?.[which] ?? rawSet
+    if (!startSet || !rawSet) return
+
+    const result = await editLandmarks({
+      blob, set: startSet, rawSet,
+      joint: s.joint, side: s.side, which,
+      // The verified angle must land on the same scale as the session's own
+      // numbers, so a zeroed session's verification is zeroed too.
+      calibrationOffset: s.calibrated ? (s.calibrationOffset ?? 0) : 0,
+    })
+    if (!result) return
+
+    const other = which === 'peak' ? 'min' : 'peak'
+    const otherSet = existing?.landmarks?.[other] ?? null
+    const otherAngle = existing?.angles?.[other === 'peak' ? 'max' : 'min'] ?? null
+
+    const landmarks = { peak: null, min: null, [which]: result.set, [other]: otherSet }
+    const angles = {
+      max: which === 'peak' ? result.angle : (other === 'peak' ? otherAngle : existing?.angles?.max ?? null),
+      min: which === 'min'  ? result.angle : (other === 'min'  ? otherAngle : existing?.angles?.min ?? null),
+    }
+
+    const record = buildVerification({
+      id: existing?.id ?? generateId(),
+      landmarks, angles,
+      by: await getUserId().catch(() => null),
+      byDevice: getDeviceId(),
+      modelId: s.modelId, modelVersion: s.modelVersion,
+    })
+
+    if (setSessionVerification(s.id, record)) {
+      this.session = { ...s, verifications: [record] }
+      this._render()
+      await this._renderFrames(this.session)
+      this._renderProvenance(this.session)
+    }
+  }
+
+  /** Empty the annotation layer; the session reads as model-measured again. */
+  _removeVerification(s) {
+    if (!setSessionVerification(s.id, null)) return
+    this.session = { ...s, verifications: [] }
+    this._render()
+    this._renderFrames(this.session)
+    this._renderProvenance(this.session)
   }
 
   /**
@@ -617,12 +719,15 @@ export class SessionDetailView {
             <figure id="frame-max" class="rom-frame" style="display:none">
               <img class="peak-frame-img" alt="Range of motion frame" />
               <div class="peak-frame-caption"></div>
+              <button class="btn-verify" data-which="peak" style="display:none">Verify landmarks</button>
             </figure>
             <figure id="frame-min" class="rom-frame" style="display:none">
               <img class="peak-frame-img" alt="Range of motion frame" />
               <div class="peak-frame-caption"></div>
+              <button class="btn-verify" data-which="min" style="display:none">Verify landmarks</button>
             </figure>
           </div>
+          <button id="btn-unverify" class="btn-unverify" style="display:none">Remove verification</button>
         </div>
 
         <!-- Timeline chart -->
@@ -940,6 +1045,22 @@ export class SessionDetailView {
           background: #111;
         }
 
+        .prov-chip.verified {
+          background: rgba(74, 222, 128, 0.12);
+          color: #4ade80;
+          border-color: rgba(74, 222, 128, 0.35);
+        }
+        .btn-verify {
+          display: block; width: 100%; margin-top: 6px;
+          padding: 8px; border-radius: 8px; border: none;
+          background: #1f2937; color: #93c5fd;
+          font-size: 0.78rem; font-weight: 600;
+        }
+        .btn-unverify {
+          display: block; width: 100%; margin-top: 10px;
+          padding: 10px; border-radius: 8px; border: none;
+          background: #262626; color: #9ca3af; font-size: 0.8rem;
+        }
         .peak-frame-caption {
           font-size: 12px;
           color: #4ade80;

@@ -180,11 +180,15 @@ export function roundRect(ctx, x, y, w, h, r) {
  *                        the same number the readout shows; falls back to the
  *                        hinge convention only when absent.
  * @param {number} [opts.scale]
+ * @param {boolean} [opts.showLabel] - false suppresses the printed angle. The
+ *                        editor sets this: it shows a much larger live readout
+ *                        of its own, and a label on the canvas sits exactly
+ *                        where the finger is dragging.
  * @returns {number} how many of the three roles were drawn (callers use this to
  *                   decide whether to show a "n/3 landmarks" warning)
  */
 export function drawPoseOverlay(ctx, points, opts = {}) {
-  const { interiorAngle = null, labelAngle = null, scale = 1 } = opts
+  const { interiorAngle = null, labelAngle = null, scale = 1, showLabel = true } = opts
 
   const roles = ['proximal', 'joint', 'distal'].filter(r => points?.[r])
   for (const role of roles) {
@@ -206,7 +210,7 @@ export function drawPoseOverlay(ctx, points, opts = {}) {
       // angle.js), so it is supplied by the caller — the one value that also
       // reaches the readout, the recorder and the snapshots. Deriving it here
       // would fork that into a second, joint-blind number.
-      drawAngleLabel(ctx, j, labelAngle ?? (180 - interiorAngle), scale)
+      if (showLabel) drawAngleLabel(ctx, j, labelAngle ?? (180 - interiorAngle), scale)
     }
   } else {
     if (p && j) drawBone(ctx, p, j, scale)

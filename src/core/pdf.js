@@ -69,6 +69,10 @@ const COLOR = {
   accent:  [21, 128, 61],              // the ROM arc — dark enough to photocopy
   warnBg:  [254, 243, 199],
   warnInk: [124, 76, 6],
+  // Verification is an UPGRADE, not a caveat, so it must never be painted in
+  // the amber a reader has learned to read as "something is wrong here".
+  noteBg:  [237, 242, 247],
+  noteInk: [55, 65, 81],
 }
 
 /**
@@ -194,9 +198,28 @@ async function renderSessionPage(doc, session, images) {
 
   // ── The measurement. The arc leads, at a size that reads across a desk.
   setInk(doc, COLOR.accent)
-  doc.setFont('helvetica', 'bold').setFontSize(24)
+  doc.setFont('helvetica', 'bold')
+  // Shrink to fit rather than run off the page. A headline is one line by
+  // definition, and this one has already overflowed once — a long joint name
+  // beside three-digit angles is enough to do it again.
+  fitFontSize(doc, winAnsi(m.romLine), CONTENT_W, 24, 13)
   doc.text(winAnsi(m.romLine), MARGIN, y + 8)
   y += 34
+
+  // The qualifier, in small type directly under the number it qualifies —
+  // never appended to the headline, which cannot wrap.
+  //
+  // Drawn at `y` (already advanced past the headline), NOT at an offset back
+  // into it: the headline is 24pt, so anything within ~14pt of its baseline
+  // collides with its descenders. An earlier attempt used y-20 and printed the
+  // two on top of each other.
+  if (m.romAttribution) {
+    setInk(doc, COLOR.muted)
+    doc.setFont('helvetica', 'normal').setFontSize(9)
+    const wrapped = doc.splitTextToSize(winAnsi(m.romAttribution), CONTENT_W)
+    doc.text(wrapped, MARGIN, y)
+    y += wrapped.length * 11 + 4
+  }
 
   // Both extremes, named per joint and per side of zero.
   setInk(doc, COLOR.ink)
@@ -220,6 +243,12 @@ async function renderSessionPage(doc, session, images) {
   doc.text(winAnsi(m.calibrationLine), MARGIN, y)
   y += 16
 
+  // Neutral band, above the caveats: it says what kind of measurement this is,
+  // which frames it with the calibration line rather than with the warnings.
+  // Only drawn when a clinician actually verified something — a model-measured
+  // session is the default and does not need a band announcing it.
+  if (m.verification.level === 'clinician') y = drawVerification(doc, y, m.verification)
+
   // One band each. A session can be on the legacy scale AND report an
   // un-zeroed minimum, and a document that prints only the first is the same
   // failure this module exists to prevent.
@@ -236,6 +265,50 @@ async function renderSessionPage(doc, session, images) {
 
   y = rule(doc, y + 8)
   await drawFrames(doc, y, session, images)
+}
+
+/**
+ * The verification band — NEUTRAL, never amber.
+ *
+ * This is a document filed in a chart, so the wording carries its own limits
+ * with it: what was re-placed, that the rest of the recording is unchanged, and
+ * in what mode it was attributed. It never names a person — this app holds no
+ * clinician name, and the filename is the only place any identifier lives.
+ */
+function drawVerification(doc, y, v) {
+  doc.setFont('helvetica', 'normal').setFontSize(9.5)
+  const text = v.attribution ? `${v.detail} ${v.attribution}.` : v.detail
+  const body = doc.splitTextToSize(winAnsi(text), CONTENT_W - 24)
+  const h = 20 + body.length * 12
+
+  doc.setFillColor(...COLOR.noteBg)
+  doc.rect(MARGIN, y - 2, CONTENT_W, h, 'F')
+
+  setInk(doc, COLOR.noteInk)
+  doc.setFont('helvetica', 'bold').setFontSize(9.5)
+  doc.text(winAnsi(v.label.toUpperCase()), MARGIN + 12, y + 13)
+  doc.setFont('helvetica', 'normal')
+  doc.text(body, MARGIN + 12, y + 26)
+
+  return y + h + 10
+}
+
+/**
+ * Reduce the font size until `text` fits `maxW`, down to `min`.
+ *
+ * jsPDF's text() neither wraps nor clips — an over-long string simply runs past
+ * the page edge and is silently lost at the margin, which is how the ROM
+ * headline shipped truncated. Sizes are set on the doc as a side effect,
+ * matching how the rest of this module drives jsPDF.
+ */
+function fitFontSize(doc, text, maxW, start, min) {
+  let size = start
+  doc.setFontSize(size)
+  while (size > min && doc.getTextWidth(text) > maxW) {
+    size -= 1
+    doc.setFontSize(size)
+  }
+  return size
 }
 
 /**

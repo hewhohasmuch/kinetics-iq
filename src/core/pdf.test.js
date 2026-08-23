@@ -26,16 +26,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /** Every text()/addImage() call the module makes, in order. */
 let drawn
+/**
+ * The stub models text WIDTH, not just calls, because pdf.js now shrinks the
+ * ROM headline to fit. A stub returning 0 would let an overflowing headline
+ * pass the tests and ship truncated — which is exactly what happened once.
+ */
+let fontSize = 10
 
 const docStub = {
   text: vi.fn((s, x, y) => {
-    for (const line of Array.isArray(s) ? s : [s]) drawn.texts.push(String(line))
+    for (const line of Array.isArray(s) ? s : [s]) {
+      drawn.texts.push(String(line))
+      drawn.sized.push({ text: String(line), size: fontSize })
+    }
   }),
   addImage:  vi.fn((...a) => drawn.images.push(a)),
   addPage:   vi.fn(() => { drawn.pages++ }),
   splitTextToSize: (s, _w) => String(s).split('\n'),
   setFont: vi.fn(() => docStub),
-  setFontSize: vi.fn(() => docStub),
+  setFontSize: vi.fn((s) => { fontSize = s; return docStub }),
+  // Rough but monotonic in both length and size, which is all the fit loop needs.
+  getTextWidth: vi.fn((s) => String(s).length * fontSize * 0.5),
   setTextColor: vi.fn(() => docStub),
   setFillColor: vi.fn(() => docStub),
   setDrawColor: vi.fn(() => docStub),
@@ -79,7 +90,8 @@ function fakeJpeg() {
 }
 
 beforeEach(() => {
-  drawn = { texts: [], images: [], pages: 1 }
+  drawn = { texts: [], images: [], pages: 1, sized: [] }
+  fontSize = 10
   vi.clearAllMocks()
   // pdf.js measures the natural size of each snapshot before placing it.
   globalThis.createImageBitmap = vi.fn(async () => ({ width: 800, height: 1100, close() {} }))
@@ -381,5 +393,106 @@ describe('buildSessionPdf — every drawn string is WinAnsi-safe', () => {
     for (const line of drawn.texts) {
       expect(winAnsi(line)).toBe(line)
     }
+  })
+})
+
+// ─── The verification band (PR 3) ────────────────────────────────────────────
+
+describe('buildSessionPdf — verification is stated, never as a warning', () => {
+
+  const verifiedSession = (angles = { min: 2, max: 130 }) => makeSession({
+    verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles }],
+  })
+
+  it('draws the verification band for a verified session', async () => {
+    await buildSessionPdf([verifiedSession()])
+    expect(allText()).toMatch(/CLINICIAN-VERIFIED/)
+  })
+
+  it('draws NO band for a model-measured session', async () => {
+    // The default needs no announcement; a band on every page would train the
+    // reader to ignore bands.
+    await buildSessionPdf([makeSession()])
+    expect(allText()).not.toMatch(/CLINICIAN-VERIFIED/)
+  })
+
+  it('paints it in the NEUTRAL colour, never the warning amber', async () => {
+    // Amber is what a reader has learned to read as "something is wrong".
+    await buildSessionPdf([verifiedSession()])
+    const fills = docStub.setFillColor.mock.calls.map(c => c.join(','))
+    expect(fills).toContain('237,242,247')      // noteBg
+    expect(fills).not.toContain('254,243,199')  // warnBg
+  })
+
+  it('carries the endpoint-only scope onto the page', async () => {
+    await buildSessionPdf([verifiedSession()])
+    expect(allText()).toMatch(/rest of the recording is unchanged/)
+  })
+
+  it('attributes a ROM derived from verified endpoints', async () => {
+    await buildSessionPdf([verifiedSession({ min: 10, max: 100 })])
+    expect(allText()).toMatch(/between clinician-verified endpoints/)
+  })
+
+  it('names no person and no patient identifier', async () => {
+    await buildSessionPdf([verifiedSession()])
+    const text = allText()
+    expect(text).not.toMatch(/user-1|MRN|Poppins/i)
+  })
+
+  it('NEVER strengthens the claim on a document filed in a chart', async () => {
+    await buildSessionPdf([verifiedSession()])
+    expect(allText().toLowerCase()).not.toMatch(/validated|accurate/)
+  })
+
+  it('keeps every drawn string WinAnsi-safe', async () => {
+    // One un-encodable character flips the WHOLE string to UTF-16 and renders
+    // as garbage — so the new band's text is held to the same rule.
+    await buildSessionPdf([verifiedSession()])
+    for (const s of drawn.texts) expect(winAnsi(s)).toBe(s)
+  })
+
+  it('draws BOTH the neutral band and a caveat band when both apply', async () => {
+    // A verified peak with a minimum sitting at the bound: the session is
+    // verified AND still cannot show hyperextension.
+    await buildSessionPdf([makeSession({
+      calibrated: false, min: 0, max: 130,
+      verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles: { min: 0, max: 130 } }],
+    })])
+    const fills = docStub.setFillColor.mock.calls.map(c => c.join(','))
+    expect(fills).toContain('237,242,247')      // verification
+    expect(fills).toContain('254,243,199')      // the caveat
+    expect(allText()).toMatch(/CANNOT SHOW HYPEREXTENSION/)
+  })
+})
+
+describe('buildSessionPdf — the ROM headline never runs off the page', () => {
+
+  // PAGE 612 wide, MARGIN 54 each side.
+  const CONTENT_W = 612 - 54 * 2
+  const width = ({ text, size }) => text.length * size * 0.5
+  const headline = () => drawn.sized.find(d => /^ROM /.test(d.text))
+
+  it('fits the ordinary case at full size', async () => {
+    await buildSessionPdf([makeSession()])
+    const h = headline()
+    expect(h).toBeTruthy()
+    expect(width(h)).toBeLessThanOrEqual(CONTENT_W)
+  })
+
+  it('SHRINKS rather than overflowing when the numbers are long', async () => {
+    // This is the shipped bug: text() neither wraps nor clips, so an over-long
+    // headline is silently lost at the margin.
+    await buildSessionPdf([makeSession({ min: -123.4, max: 149.1, rom: 272.5 })])
+    const h = headline()
+    expect(width(h)).toBeLessThanOrEqual(CONTENT_W)
+  })
+
+  it('still prints the qualifier, just not inside the headline', async () => {
+    await buildSessionPdf([makeSession({
+      verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles: { min: 10, max: 100 } }],
+    })])
+    expect(headline().text).not.toMatch(/verified/)
+    expect(allText()).toMatch(/clinician-verified endpoints/)
   })
 })
