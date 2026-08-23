@@ -11,7 +11,8 @@ import { SessionRecorder }   from '../core/session.js'
 import { saveSession, getActivePatientId, getPatient, enqueueImageUpload } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
 import { isConfigured }      from '../core/supabase.js'
-import { normalizeSet }      from '../core/landmarks.js'
+import { normalizeSetInRect, ROLES } from '../core/landmarks.js'
+import { storedFrameRect }   from '../core/frameCrop.js'
 import { MODEL_ID, MODEL_VERSION } from '../detection/pose.js'
 import { getStatus, onSyncStatus } from '../core/sync.js'
 import { putImage, usage, BUDGET_BYTES } from '../core/imageStore.js'
@@ -1148,9 +1149,10 @@ export class MeasureView {
   }
 
   /**
-   * Retain the current video frame — CLEAN, with no overlay composited — as the
-   * snapshot for `which` ('max' or 'min'), together with the landmarks and the
-   * raw evidence for that frame. Overwrites whatever extreme was held before.
+   * Retain the current video frame — CLEAN, with no overlay composited, cropped
+   * to the region the camera view was showing — as the snapshot for `which`
+   * ('max' or 'min'), together with the landmarks and the raw evidence for that
+   * frame. Overwrites whatever extreme was held before.
    *
    * WHY THE OVERLAY IS NOT DRAWN IN. A baked composite leaves no clean frame
    * anywhere, so a clinician dragging a landmark later would see the new
@@ -1160,9 +1162,10 @@ export class MeasureView {
    * record reports.
    *
    * This also does strictly LESS work per capture than the composite did: no
-   * object-fit:cover transform, no devicePixelRatio scaling, no second
-   * drawImage. And because the stored coordinates are fractions of this buffer,
-   * none of that display geometry has to be reconstructed later to use them.
+   * devicePixelRatio scaling and no second drawImage. The one piece of display
+   * geometry it does apply is the object-fit:cover CROP — see below — and it is
+   * applied to the PIXELS, once, so the stored coordinates are fractions of the
+   * stored image and nothing has to be reconstructed later to use them.
    *
    * Only the pixels are kept here — JPEG encoding happens once at stop().
    * A sweep produces many successive new extremes, and encoding each one
@@ -1183,22 +1186,39 @@ export class MeasureView {
       const frame = this._frameCanvas
       if (!frame || !frame.width || !frame.height) return false
 
+      // WHAT YOU RECORDED IS WHAT YOU GET. The video element is object-fit:
+      // cover, so the clinician framed the shot inside a CROP of the stream —
+      // on a portrait phone against a landscape camera, most of the buffer is
+      // off-screen scenery they never saw. Storing the whole buffer filed that
+      // scenery into the chart and shrank the only part that carries the
+      // measurement, in the PDF and in the landmark editor alike, where a pixel
+      // is worth about a degree. So the snapshot keeps the visible region.
+      const rect = storedFrameRect(
+        this.overlay.visibleVideoRect(frame.width, frame.height),
+        ROLES.map(r => markers[r]?.center),
+        frame.width, frame.height,
+      )
+
       const key = which === 'max' ? '_maxCanvas' : '_minCanvas'
       if (!this[key]) this[key] = document.createElement('canvas')
       const offscreen = this[key]
-      if (offscreen.width !== frame.width || offscreen.height !== frame.height) {
+      if (offscreen.width !== rect.width || offscreen.height !== rect.height) {
         // Assigning .width/.height clears the canvas — only on a real change.
-        offscreen.width  = frame.width
-        offscreen.height = frame.height
+        offscreen.width  = rect.width
+        offscreen.height = rect.height
       }
-      // The video frame is opaque and covers the canvas, so this fully replaces
-      // the previous extreme rather than compositing over it.
-      offscreen.getContext('2d').drawImage(frame, 0, 0)
+      // Whole-pixel source rect copied 1:1, so cropping resamples nothing. The
+      // video frame is opaque and covers the canvas, so this fully replaces the
+      // previous extreme rather than compositing over it.
+      offscreen.getContext('2d').drawImage(
+        frame, rect.x, rect.y, rect.width, rect.height, 0, 0, rect.width, rect.height)
 
-      // Coordinates are fractions of THIS buffer, so they survive the
-      // SNAPSHOT_MAX_EDGE downscale at encode time and any later re-encode.
+      // Coordinates are fractions of THE STORED REGION — the same pixels that
+      // just went into the canvas, not the buffer they were cut from — so they
+      // survive the SNAPSHOT_MAX_EDGE downscale at encode time and any later
+      // re-encode, and every consumer can read its dimensions off the image.
       this.recorder.setExtremeEvidence(which, {
-        set:      normalizeSet(markers, frame.width, frame.height, this._joint, this._side),
+        set:      normalizeSetInRect(markers, rect, this._joint, this._side),
         rawAngle,
         tilt,
       })

@@ -471,7 +471,7 @@ describe('landmark evidence', () => {
     // It describes HOW THE FRAMES WERE STORED, not whether landmarks resolved.
     // Absence must keep meaning "recorded before landmark capture existed",
     // whose stored image is the legacy baked composite.
-    expect(run().landmarkSpace).toBe('video1')
+    expect(run().landmarkSpace).toBe('frame1')
   })
 
   it('stamps which model produced the landmarks', () => {
@@ -509,7 +509,7 @@ describe('landmark evidence', () => {
 
   it('stores a picture with a null set when landmarks did not resolve', () => {
     const s = run({ max: { set: null, rawAngle: null, tilt: null } })
-    expect(s.landmarkSpace).toBe('video1')   // still a clean frame
+    expect(s.landmarkSpace).toBe('frame1')   // still a clean frame
     expect(s.landmarksRaw.peak).toBeNull()
   })
 

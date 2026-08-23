@@ -61,7 +61,7 @@ create table public.sessions (
   -- ── Landmark evidence + clinician-verified endpoint observations (0006) ────
   -- Immutable raw evidence, written once at capture. landmarks_raw is the
   -- baseline the research delta is measured against, forever.
-  landmark_space  text,                                -- 'video1' | absent = pre-landmark-capture, NOT verifiable
+  landmark_space  text,                                -- 'frame1' (fractions of the stored crop) | 'video1' (of the whole buffer) | absent = pre-landmark-capture, NOT verifiable
   model_id        text,
   model_version   text,
   landmarks_raw   jsonb,                               -- {peak,min}: {proximal,joint,distal} normalized + kind

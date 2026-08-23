@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { drawPoseOverlay, scaleFor, MARKER_COLORS } from './overlay.js'
+import { drawPoseOverlay, scaleFor, MARKER_COLORS, Overlay } from './overlay.js'
+import { coverTransform } from '../core/frameCrop.js'
 
 function fakeCtx() {
   const calls = []
@@ -165,5 +166,61 @@ describe('marker colours are role-stable', () => {
 
   it('keeps one colour per role so a frame reads the same as the live view', () => {
     expect(Object.keys(MARKER_COLORS).sort()).toEqual(['distal', 'joint', 'proximal'])
+  })
+})
+
+
+// ─── The live overlay's crop ─────────────────────────────────────────────────
+
+describe('Overlay.visibleVideoRect — the crop the snapshot will store', () => {
+
+  // The class needs a canvas element and a window; neither exists in Node, and
+  // neither is what is under test here — the geometry is.
+  function attachedOverlay(displayW, displayH) {
+    const ctx = { ...fakeCtx(), setTransform: () => {}, clearRect: () => {} }
+    const canvas = {
+      clientWidth: displayW, clientHeight: displayH, width: 0, height: 0,
+      getContext: () => ctx,
+    }
+    globalThis.window = globalThis.window || {}
+    globalThis.window.devicePixelRatio = 2
+    const o = new Overlay()
+    o.attach(canvas)
+    return o
+  }
+
+  it('reports the SAME region the live transform draws against', () => {
+    // One computation feeding both: if these ever diverge, the stored picture
+    // is not the one the clinician watched the dots move on.
+    const o = attachedOverlay(430, 700)
+    o.resize(1280, 720)
+    expect(o.visibleVideoRect()).toEqual(coverTransform(1280, 720, 430, 700).visible)
+  })
+
+  it('is null before a resize — "crop unknown", never "nothing visible"', () => {
+    expect(new Overlay().visibleVideoRect()).toBeNull()
+  })
+
+  it('is null when the layout cannot be measured', () => {
+    const o = attachedOverlay(0, 0)
+    o.resize(1280, 720)
+    expect(o.visibleVideoRect()).toBeNull()
+  })
+
+  it('drops a stale rect when the layout goes unmeasurable after a good resize', () => {
+    // A capture must then store the whole frame — merely wider — rather than a
+    // rect describing a stream size or a layout that no longer exists.
+    const o = attachedOverlay(430, 700)
+    o.resize(1280, 720)
+    o.canvas.clientWidth = 0
+    o.resize(1280, 720)
+    expect(o.visibleVideoRect()).toBeNull()
+  })
+
+  it('refuses to answer for a different stream size than it was resized for', () => {
+    const o = attachedOverlay(430, 700)
+    o.resize(1280, 720)
+    expect(o.visibleVideoRect(640, 480)).toBeNull()
+    expect(o.visibleVideoRect(1280, 720)).not.toBeNull()
   })
 })
