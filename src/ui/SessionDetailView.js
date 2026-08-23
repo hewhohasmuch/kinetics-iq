@@ -28,6 +28,7 @@ import { sessionProvenance, calibrationSummary, extensionFloorCaveat } from '../
 import { reportedExtremes } from '../core/extremes.js'
 import { sessionNoteText } from '../core/report.js'
 import { resolveFrameBlob } from '../core/frames.js'
+import { renderFrame, frameLandmarks } from '../core/frameRender.js'
 import { exportSessionsAsPdf, canShareFile, shareFile } from './exportPdf.js'
 import { Chart } from 'chart.js/auto'
 
@@ -245,24 +246,25 @@ export class SessionDetailView {
     // The motion is named per joint — a shoulder elevates, an ankle dorsiflexes
     // — and the min frame is only the NEGATIVE motion when the value actually
     // crossed the zero point. extremeLabels() owns that rule so these captions
-    // and the stat cards above them stay in step. Both captions keep the signed
-    // value the overlay burned into the image — an abs() here would put two
-    // different numbers on one picture.
-    // Captions read from the same reported values as the stat cards above, so
-    // a picture and the card describing it cannot disagree about one number.
+    // and the stat cards above them stay in step. Captions and the angle DRAWN
+    // on each frame both come from the reported values, so a picture and the
+    // card describing it cannot disagree about one number; the signed value is
+    // kept, since an abs() would put two different numbers on one picture.
     const e = reportedExtremes(s)
     const { maxLabel, minLabel } = extremeLabels(s.joint, e.reportedMin)
 
     const specs = [
-      { which: 'peak', path: s.peakFramePath, figId: 'frame-max', caption: `${maxLabel}: ${e.reportedMax}°` },
-      { which: 'min',  path: s.minFramePath,  figId: 'frame-min', caption: `${minLabel}: ${e.reportedMin}°` },
+      { which: 'peak', path: s.peakFramePath, figId: 'frame-max',
+        caption: `${maxLabel}: ${e.reportedMax}°`, angle: e.reportedMax },
+      { which: 'min',  path: s.minFramePath,  figId: 'frame-min',
+        caption: `${minLabel}: ${e.reportedMin}°`, angle: e.reportedMin },
     ]
 
     let shown = 0
     for (const spec of specs) {
       const fig = document.getElementById(spec.figId)
       if (!fig) continue
-      const url = await this._resolveFrameUrl(s.id, spec.which, spec.path)
+      const url = await this._resolveFrameUrl(s, spec.which, spec.path, spec.angle)
       if (url) {
         const img = fig.querySelector('img')
         img.src = url
@@ -286,15 +288,24 @@ export class SessionDetailView {
    * Resolve a displayable object URL for one frame, or null if unavailable.
    *
    * The IndexedDB → cloud → re-cache rule lives in frames.js because the PDF
-   * export needs exactly the same one; all this adds is the object URL and its
-   * bookkeeping for revocation on unmount.
+   * export needs exactly the same one; all this adds is the overlay render, the
+   * object URL and its bookkeeping for revocation on unmount.
+   *
+   * The overlay is DRAWN HERE rather than being baked into the stored pixels,
+   * so the angle on the picture is the angle the record reports — including
+   * after a clinician verifies an endpoint. A legacy session has no stored
+   * landmarks and `renderFrame` hands its baked composite straight back.
    *
    * @returns {Promise<string|null>}
    */
-  async _resolveFrameUrl(sessionId, which, path) {
-    const blob = await resolveFrameBlob(sessionId, which, path)
+  async _resolveFrameUrl(session, which, path, labelAngle) {
+    const blob = await resolveFrameBlob(session.id, which, path)
     if (!blob) return null
-    const url = URL.createObjectURL(blob)
+    const rendered = await renderFrame(blob, frameLandmarks(session, which), {
+      joint: session.joint,
+      labelAngle,
+    })
+    const url = URL.createObjectURL(rendered)
     this._objectUrls.push(url)
     return url
   }

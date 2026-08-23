@@ -11,6 +11,8 @@ import { SessionRecorder }   from '../core/session.js'
 import { saveSession, getActivePatientId, getPatient, enqueueImageUpload } from '../core/storage.js'
 import { CalibrationManager } from '../core/calibration.js'
 import { isConfigured }      from '../core/supabase.js'
+import { normalizeSet }      from '../core/landmarks.js'
+import { MODEL_ID, MODEL_VERSION } from '../detection/pose.js'
 import { getStatus, onSyncStatus } from '../core/sync.js'
 import { putImage, usage, BUDGET_BYTES } from '../core/imageStore.js'
 
@@ -865,6 +867,7 @@ export class MeasureView {
     // rather than stop: _btnCalibrate is disabled for the whole recording
     // (below), so the offset cannot move mid-session.
     this.recorder.setCalibration(this.calibration.offset, this.calibration.isCalibrated)
+    this.recorder.setModel(MODEL_ID, MODEL_VERSION)
     this.recorder.start()
     this._maxAngle    = -Infinity
     this._minAngle    = Infinity
@@ -1099,20 +1102,31 @@ export class MeasureView {
     })
 
     // ── Extreme snapshots ──────────────────────────────────────────
-    // Must come AFTER overlay.draw() for this frame. The snapshot composites
-    // the overlay canvas, so capturing before the draw burns in the PREVIOUS
-    // frame's angle — which put a number from the opposite end of the range
-    // onto the peak-extension image.
+    // THIS USED TO HAVE TO RUN AFTER overlay.draw(), and the reason is worth
+    // keeping: the snapshot composited the overlay canvas, so capturing first
+    // burned in the PREVIOUS frame's angle — which put a number from the
+    // opposite end of the range onto the peak-extension image. That was
+    // expensive to find.
+    //
+    // The constraint is gone because the composite is gone. Snapshots now store
+    // the CLEAN frame plus the landmarks, and the overlay is drawn at view time
+    // from the saved record (core/frameRender.js). There is no longer a label
+    // baked into the pixels that could be a frame out of date — which is why
+    // this strengthens "one value, everywhere" rather than relaxing it.
+    //
+    // What HAS NOT changed: the pixels must still come from this tick's frame
+    // buffer, never a fresh read of the live video element. See the frame-grab
+    // comment at the top of this method.
     if (this.recorder.isActive && displayAngle !== null) {
       // Snapshot both extremes: max flexion (most bent) and min flexion
       // (straightest). Extension tests peak at the minimum, not the maximum.
       if (displayAngle > this._maxAngle) {
         this._maxAngle    = displayAngle
-        this._maxHasFrame = this._captureFrameTo('max') || this._maxHasFrame
+        this._maxHasFrame = this._captureFrameTo('max', markers, rawFlexion, tilt) || this._maxHasFrame
       }
       if (displayAngle < this._minAngle) {
         this._minAngle    = displayAngle
-        this._minHasFrame = this._captureFrameTo('min') || this._minHasFrame
+        this._minHasFrame = this._captureFrameTo('min', markers, rawFlexion, tilt) || this._minHasFrame
       }
     }
 
@@ -1134,8 +1148,21 @@ export class MeasureView {
   }
 
   /**
-   * Composite the current video frame + overlay into the retained canvas for
-   * `which` ('max' or 'min'), overwriting whatever extreme was held before.
+   * Retain the current video frame — CLEAN, with no overlay composited — as the
+   * snapshot for `which` ('max' or 'min'), together with the landmarks and the
+   * raw evidence for that frame. Overwrites whatever extreme was held before.
+   *
+   * WHY THE OVERLAY IS NOT DRAWN IN. A baked composite leaves no clean frame
+   * anywhere, so a clinician dragging a landmark later would see the new
+   * skeleton over the old one with a stale number printed beside the new one.
+   * The overlay is drawn at view time instead (core/frameRender.js), from the
+   * saved record — so the label can never fall out of step with the number the
+   * record reports.
+   *
+   * This also does strictly LESS work per capture than the composite did: no
+   * object-fit:cover transform, no devicePixelRatio scaling, no second
+   * drawImage. And because the stored coordinates are fractions of this buffer,
+   * none of that display geometry has to be reconstructed later to use them.
    *
    * Only the pixels are kept here — JPEG encoding happens once at stop().
    * A sweep produces many successive new extremes, and encoding each one
@@ -1143,41 +1170,38 @@ export class MeasureView {
    * are discarded.
    *
    * @param {'max'|'min'} which
+   * @param {object} markers      - this tick's markers, in video pixel space
+   * @param {number|null} rawAngle - UNFILTERED angle from those landmarks
+   * @param {number|null} tilt     - this frame's out-of-plane tilt
    * @returns {boolean} whether a frame was captured (non-critical if not)
    */
-  _captureFrameTo(which) {
+  _captureFrameTo(which, markers, rawAngle, tilt) {
     try {
-      const overlayCanvas = this._overlayCanvas
       // Same frame-buffer canvas that fed detect() this tick — not a fresh read
       // of the live video element. See the frame-grab comment at the top of
       // _runDetection().
       const frame = this._frameCanvas
-      if (!overlayCanvas || !frame) return false
+      if (!frame || !frame.width || !frame.height) return false
 
-      const w = overlayCanvas.width
-      const h = overlayCanvas.height
       const key = which === 'max' ? '_maxCanvas' : '_minCanvas'
       if (!this[key]) this[key] = document.createElement('canvas')
       const offscreen = this[key]
-      offscreen.width  = w
-      offscreen.height = h
-      const ctx = offscreen.getContext('2d')
+      if (offscreen.width !== frame.width || offscreen.height !== frame.height) {
+        // Assigning .width/.height clears the canvas — only on a real change.
+        offscreen.width  = frame.width
+        offscreen.height = frame.height
+      }
+      // The video frame is opaque and covers the canvas, so this fully replaces
+      // the previous extreme rather than compositing over it.
+      offscreen.getContext('2d').drawImage(frame, 0, 0)
 
-      // Draw the buffered frame scaled to match the object-fit:cover transform
-      const o = this.overlay
-      const dpr = window.devicePixelRatio || 1
-      ctx.save()
-      ctx.scale(dpr, dpr)
-      ctx.drawImage(
-        frame,
-        o._offsetX, o._offsetY,
-        frame.width  * o._scale,
-        frame.height * o._scale
-      )
-      ctx.restore()
-
-      // Draw overlay (landmarks + arc) on top
-      ctx.drawImage(overlayCanvas, 0, 0)
+      // Coordinates are fractions of THIS buffer, so they survive the
+      // SNAPSHOT_MAX_EDGE downscale at encode time and any later re-encode.
+      this.recorder.setExtremeEvidence(which, {
+        set:      normalizeSet(markers, frame.width, frame.height, this._joint, this._side),
+        rawAngle,
+        tilt,
+      })
 
       return true
     } catch (_) {

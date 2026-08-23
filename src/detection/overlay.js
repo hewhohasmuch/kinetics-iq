@@ -1,9 +1,21 @@
 /**
  * overlay.js
  *
- * Draws the AR overlay on a canvas element positioned over the video feed.
+ * Draws the AR overlay — landmark dots, bones, angle arc and label.
  *
- * COORDINATE SYSTEM — this is the critical part:
+ * TWO CALLERS, ONE RENDERER. The `Overlay` class draws live over the video;
+ * `core/frameRender.js` draws the same graphics onto a stored snapshot at view
+ * time. They share the exported primitives below and, above them,
+ * `drawPoseOverlay()`. That sharing is the point: the live view and the stored
+ * frame cannot drift apart into two slightly different pictures of one
+ * measurement, which is the same "one value, everywhere" rule the angle chain
+ * follows.
+ *
+ * The primitives take an explicit `ctx` and `scale` instead of reading class
+ * state, so they work on any 2D context — a display canvas transformed by
+ * devicePixelRatio, or an offscreen canvas at a JPEG's natural size.
+ *
+ * COORDINATE SYSTEM — this is the critical part for the LIVE overlay:
  *
  * The video element uses object-fit: cover, which means the video stream
  * is scaled and CROPPED to fill the camera-stack div. The canvas sits on
@@ -21,18 +33,190 @@
  *
  * This guarantees dots land exactly on the physical markers regardless of
  * phone orientation, video resolution, or screen size.
+ *
+ * NOTE that none of that transform reaches the STORED frame: snapshots keep the
+ * raw frame buffer and normalized landmarks, so the crop, the dpr and these
+ * offsets are all live-display concerns. See core/landmarks.js.
  */
 
-const MARKER_COLORS = {
+export const MARKER_COLORS = {
   proximal: '#60a5fa',
   joint:    '#4ade80',
   distal:   '#f472b6',
 }
-const FALLBACK_COLOR = '#ffffff'
+export const FALLBACK_COLOR = '#ffffff'
 const LINE_COLOR     = 'rgba(255, 255, 255, 0.7)'
 const ARC_COLOR      = '#facc15'
 const ANGLE_TEXT_BG  = 'rgba(0, 0, 0, 0.65)'
 const ANGLE_TEXT_FG  = '#ffffff'
+
+/** Reference height at which UI elements draw at 1× (see scaleFor). */
+const REFERENCE_HEIGHT = 700
+
+/**
+ * Size multiplier for dots, line widths and text, relative to the canvas
+ * height, so the overlay looks the same on a phone screen and on a
+ * full-resolution stored frame.
+ *
+ * @param {number} heightPx
+ * @returns {number}
+ */
+export function scaleFor(heightPx) {
+  return (heightPx || REFERENCE_HEIGHT) / REFERENCE_HEIGHT
+}
+
+// ─── Primitives ───────────────────────────────────────────────────────────────
+// All coordinates are already in the target context's own pixel space.
+
+export function drawLandmarkDot(ctx, center, color, visibility = 1, scale = 1) {
+  const r = 10 * scale
+
+  ctx.beginPath()
+  ctx.arc(center.x, center.y, r, 0, Math.PI * 2)
+  ctx.fillStyle   = color
+  ctx.globalAlpha = 0.85
+  ctx.fill()
+  ctx.globalAlpha = 1
+
+  // Confidence ring — dashed when visibility is low
+  ctx.beginPath()
+  ctx.arc(center.x, center.y, r + 3 * scale, 0, Math.PI * 2)
+  ctx.strokeStyle = color
+  ctx.lineWidth   = 1.5 * scale
+  ctx.globalAlpha = visibility
+  if (visibility < 0.7) ctx.setLineDash([3 * scale, 3 * scale])
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.globalAlpha = 1
+}
+
+export function drawBone(ctx, from, to, scale = 1) {
+  ctx.beginPath()
+  ctx.moveTo(from.x, from.y)
+  ctx.lineTo(to.x, to.y)
+  ctx.strokeStyle = LINE_COLOR
+  ctx.lineWidth   = 2.5 * scale
+  ctx.globalAlpha = 0.8
+  ctx.setLineDash([7 * scale, 4 * scale])
+  ctx.stroke()
+  ctx.setLineDash([])
+  ctx.globalAlpha = 1
+}
+
+/**
+ * The arc between the two segments.
+ *
+ * It is swept between the DRAWN point directions, so it always agrees with the
+ * bones beside it. The angle VALUE is not an input here — that is the label's
+ * job, and the label is handed the one smoothed value the readout shows.
+ */
+export function drawAngleArc(ctx, proximal, joint, distal, scale = 1) {
+  const angle1 = Math.atan2(proximal.y - joint.y, proximal.x - joint.x)
+  const angle2 = Math.atan2(distal.y   - joint.y, distal.x   - joint.x)
+
+  ctx.beginPath()
+  ctx.arc(joint.x, joint.y, 36 * scale, angle1, angle2)
+  ctx.strokeStyle = ARC_COLOR
+  ctx.lineWidth   = 2.5 * scale
+  ctx.globalAlpha = 0.9
+  ctx.stroke()
+  ctx.globalAlpha = 1
+}
+
+export function drawAngleLabel(ctx, joint, flexionDeg, scale = 1) {
+  const text     = `${Math.round(flexionDeg)}°`
+  const fontSize = 26 * scale
+  const x        = joint.x + 46 * scale
+  const y        = joint.y - 18 * scale
+  const pad      = 5 * scale
+
+  ctx.font         = `bold ${fontSize}px -apple-system, sans-serif`
+  ctx.textAlign    = 'left'
+  ctx.textBaseline = 'middle'
+
+  const metrics = ctx.measureText(text)
+  const boxW    = metrics.width + pad * 2
+  const boxH    = fontSize + pad * 2
+
+  ctx.fillStyle   = ANGLE_TEXT_BG
+  ctx.globalAlpha = 0.85
+  roundRect(ctx, x - pad, y - boxH / 2, boxW, boxH, 5 * scale)
+  ctx.fill()
+
+  ctx.globalAlpha = 1
+  ctx.fillStyle   = ANGLE_TEXT_FG
+  ctx.fillText(text, x, y)
+}
+
+export function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.lineTo(x + w - r, y)
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r)
+  ctx.lineTo(x + w, y + h - r)
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
+  ctx.lineTo(x + r, y + h)
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r)
+  ctx.lineTo(x, y + r)
+  ctx.quadraticCurveTo(x, y, x + r, y)
+  ctx.closePath()
+}
+
+// ─── The shared renderer ──────────────────────────────────────────────────────
+
+/**
+ * Draw the full skeleton — dots, bones, arc, label — into any 2D context.
+ *
+ * THE ONE RENDERER both the live overlay and the stored-frame render call, so a
+ * snapshot shows exactly what the clinician saw while measuring.
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} points - { proximal?, joint?, distal? }, each { x, y, visibility? },
+ *                          already in this context's pixel space
+ * @param {object} opts
+ * @param {number|null} [opts.interiorAngle] - gates the arc and label; null when
+ *                        no angle was resolvable for this frame
+ * @param {number|null} [opts.labelAngle]    - the clinical value to print. Must be
+ *                        the same number the readout shows; falls back to the
+ *                        hinge convention only when absent.
+ * @param {number} [opts.scale]
+ * @returns {number} how many of the three roles were drawn (callers use this to
+ *                   decide whether to show a "n/3 landmarks" warning)
+ */
+export function drawPoseOverlay(ctx, points, opts = {}) {
+  const { interiorAngle = null, labelAngle = null, scale = 1 } = opts
+
+  const roles = ['proximal', 'joint', 'distal'].filter(r => points?.[r])
+  for (const role of roles) {
+    drawLandmarkDot(ctx, points[role], MARKER_COLORS[role] || FALLBACK_COLOR,
+                    points[role].visibility ?? 1, scale)
+  }
+
+  const p = points?.proximal
+  const j = points?.joint
+  const d = points?.distal
+
+  if (p && j && d) {
+    drawBone(ctx, p, j, scale)
+    drawBone(ctx, j, d, scale)
+
+    if (interiorAngle !== null && interiorAngle !== undefined) {
+      drawAngleArc(ctx, p, j, d, scale)
+      // The clinical value differs per joint (see JOINT_ANGLE_CONVENTION in
+      // angle.js), so it is supplied by the caller — the one value that also
+      // reaches the readout, the recorder and the snapshots. Deriving it here
+      // would fork that into a second, joint-blind number.
+      drawAngleLabel(ctx, j, labelAngle ?? (180 - interiorAngle), scale)
+    }
+  } else {
+    if (p && j) drawBone(ctx, p, j, scale)
+    if (j && d) drawBone(ctx, j, d, scale)
+  }
+
+  return roles.length
+}
+
+// ─── The live overlay ─────────────────────────────────────────────────────────
 
 export class Overlay {
   constructor() {
@@ -118,8 +302,7 @@ export class Overlay {
    * @param {object}      opts
    * @param {string}      [opts.joint]      - joint name, for setup hints
    * @param {number|null} [opts.labelAngle] - clinical angle to print; must be the
-   *                        same value the readout shows. Falls back to the hinge
-   *                        convention when absent.
+   *                        same value the readout shows.
    */
   draw(markers, interiorAngle, opts = {}) {
     if (!this.ctx) return
@@ -138,203 +321,62 @@ export class Overlay {
       this._drawSetupHint('Frame knee to foot · big toe toward camera')
     }
 
-    // Convert all centers to display space up front
-    const display = {}
+    // Convert all centers to display space up front, then hand the shared
+    // renderer plain points — the same call the stored frame makes.
+    const points = {}
     for (const role of roles) {
-      display[role] = {
-        ...markers[role],
-        displayCenter: this._toDisplay(markers[role].center),
+      points[role] = {
+        ...this._toDisplay(markers[role].center),
+        visibility: markers[role].visibility ?? 1,
       }
     }
 
-    // Draw landmark dots
-    for (const role of roles) {
-      this._drawLandmarkDot(
-        display[role].displayCenter,
-        MARKER_COLORS[role] || FALLBACK_COLOR,
-        display[role].visibility ?? 1,
-      )
-    }
+    const drawn = drawPoseOverlay(this.ctx, points, {
+      interiorAngle,
+      labelAngle: opts.labelAngle,
+      scale:      scaleFor(this.canvas.clientHeight),
+    })
 
-    const p = display['proximal']
-    const j = display['joint']
-    const d = display['distal']
-
-    if (p && j && d) {
-      this._drawBone(p.displayCenter, j.displayCenter)
-      this._drawBone(j.displayCenter, d.displayCenter)
-
-      if (interiorAngle !== null && interiorAngle !== undefined) {
-        this._drawAngleArc(p.displayCenter, j.displayCenter, d.displayCenter, interiorAngle)
-        // The clinical value differs per joint (see JOINT_ANGLE_CONVENTION in
-        // angle.js), so it is supplied by the caller — the one value that also
-        // reaches the readout, the recorder and the snapshots. Deriving it here
-        // would fork that into a second, joint-blind number.
-        this._drawAngleLabel(
-          j.displayCenter,
-          opts.labelAngle ?? (180 - interiorAngle),
-        )
-      }
-    } else {
-      if (p && j) this._drawBone(p.displayCenter, j.displayCenter)
-      if (j && d) this._drawBone(j.displayCenter, d.displayCenter)
-      this._drawMissingWarning(roles.length)
-    }
+    if (drawn < 3) this._drawMissingWarning(drawn)
   }
 
-  // ─── Private drawing helpers ─────────────────────────────────────────
-  // All coordinates here are already in display CSS pixel space.
-  // _scalePx() scales UI element sizes (dots, line widths) relative to
-  // the display height so they look consistent on all screen sizes.
-
-  _drawLandmarkDot(center, color, visibility = 1) {
-    const r   = this._scalePx(10)
-    const ctx = this.ctx
-
-    ctx.beginPath()
-    ctx.arc(center.x, center.y, r, 0, Math.PI * 2)
-    ctx.fillStyle   = color
-    ctx.globalAlpha = 0.85
-    ctx.fill()
-    ctx.globalAlpha = 1
-
-    // Confidence ring — dashed when visibility is low
-    ctx.beginPath()
-    ctx.arc(center.x, center.y, r + this._scalePx(3), 0, Math.PI * 2)
-    ctx.strokeStyle = color
-    ctx.lineWidth   = this._scalePx(1.5)
-    ctx.globalAlpha = visibility
-    if (visibility < 0.7) ctx.setLineDash([this._scalePx(3), this._scalePx(3)])
-    ctx.stroke()
-    ctx.setLineDash([])
-    ctx.globalAlpha = 1
-  }
-
-  _drawBone(from, to) {
-    const ctx = this.ctx
-    ctx.beginPath()
-    ctx.moveTo(from.x, from.y)
-    ctx.lineTo(to.x, to.y)
-    ctx.strokeStyle = LINE_COLOR
-    ctx.lineWidth   = this._scalePx(2.5)
-    ctx.globalAlpha = 0.8
-    ctx.setLineDash([this._scalePx(7), this._scalePx(4)])
-    ctx.stroke()
-    ctx.setLineDash([])
-    ctx.globalAlpha = 1
-  }
-
-  _drawAngleArc(proximal, joint, distal, interiorAngleDeg) {
-    const ctx    = this.ctx
-    const angle1 = Math.atan2(proximal.y - joint.y, proximal.x - joint.x)
-    const angle2 = Math.atan2(distal.y   - joint.y, distal.x   - joint.x)
-    const r      = this._scalePx(36)
-
-    ctx.beginPath()
-    ctx.arc(joint.x, joint.y, r, angle1, angle2)
-    ctx.strokeStyle = ARC_COLOR
-    ctx.lineWidth   = this._scalePx(2.5)
-    ctx.globalAlpha = 0.9
-    ctx.stroke()
-    ctx.globalAlpha = 1
-  }
-
-  _drawAngleLabel(joint, flexionDeg) {
-    const ctx      = this.ctx
-    const text     = `${Math.round(flexionDeg)}°`
-    const fontSize = this._scalePx(26)
-    const ox       = this._scalePx(46)
-    const oy       = this._scalePx(-18)
-    const x        = joint.x + ox
-    const y        = joint.y + oy
-    const pad      = this._scalePx(5)
-
-    ctx.font         = `bold ${fontSize}px -apple-system, sans-serif`
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-
-    const metrics = ctx.measureText(text)
-    const boxW    = metrics.width + pad * 2
-    const boxH    = fontSize + pad * 2
-
-    ctx.fillStyle   = ANGLE_TEXT_BG
-    ctx.globalAlpha = 0.85
-    this._roundRect(x - pad, y - boxH / 2, boxW, boxH, this._scalePx(5))
-    ctx.fill()
-
-    ctx.globalAlpha = 1
-    ctx.fillStyle   = ANGLE_TEXT_FG
-    ctx.fillText(text, x, y)
-  }
+  // ─── Live-only chrome ────────────────────────────────────────────────
+  // Hints and warnings belong to the camera view, not to a stored record:
+  // "2/3 landmarks" is advice about how to hold the phone RIGHT NOW, and
+  // printing it onto a saved snapshot would caption a finished measurement
+  // with a transient instruction.
 
   _drawMissingWarning(foundCount) {
     const ctx  = this.ctx
     const text = `${foundCount}/3 landmarks`
-    const displayH = this.canvas.clientHeight
+    const scale = scaleFor(this.canvas.clientHeight)
 
-    ctx.font         = `${this._scalePx(16)}px -apple-system, sans-serif`
+    ctx.font         = `${16 * scale}px -apple-system, sans-serif`
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle    = '#facc15'
     ctx.globalAlpha  = 0.9
-    ctx.fillText(text, this.canvas.clientWidth / 2, displayH - this._scalePx(50))
+    ctx.fillText(text, this.canvas.clientWidth / 2, this.canvas.clientHeight - 50 * scale)
     ctx.globalAlpha  = 1
   }
 
   _drawSetupHint(text) {
     const ctx = this.ctx
-    ctx.font         = `${this._scalePx(12)}px -apple-system, sans-serif`
+    const scale = scaleFor(this.canvas.clientHeight)
+    ctx.font         = `${12 * scale}px -apple-system, sans-serif`
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'top'
     ctx.fillStyle    = 'rgba(250,204,21,0.75)'
-    ctx.fillText(text, this.canvas.clientWidth / 2, this._scalePx(12))
+    ctx.fillText(text, this.canvas.clientWidth / 2, 12 * scale)
   }
 
   _drawHint(text) {
     const ctx = this.ctx
-    ctx.font         = `${this._scalePx(16)}px -apple-system, sans-serif`
+    const scale = scaleFor(this.canvas.clientHeight)
+    ctx.font         = `${16 * scale}px -apple-system, sans-serif`
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle    = 'rgba(255,255,255,0.4)'
-    ctx.fillText(text, this.canvas.clientWidth / 2, this.canvas.clientHeight - this._scalePx(50))
-  }
-
-  _drawCorners(corners, color) {
-    const ctx = this.ctx
-    const r   = this._scalePx(4)
-    ctx.fillStyle   = color
-    ctx.globalAlpha = 0.6
-    for (const c of corners) {
-      ctx.beginPath()
-      ctx.arc(c.x, c.y, r, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    ctx.globalAlpha = 1
-  }
-
-  /**
-   * Scale a size value relative to the display height.
-   * Reference: 700px display height = 1× scale.
-   * Keeps dots and text consistently sized on all phones.
-   */
-  _scalePx(value) {
-    if (!this.canvas) return value
-    const displayH = this.canvas.clientHeight || 700
-    return value * (displayH / 700)
-  }
-
-  _roundRect(x, y, w, h, r) {
-    const ctx = this.ctx
-    ctx.beginPath()
-    ctx.moveTo(x + r, y)
-    ctx.lineTo(x + w - r, y)
-    ctx.quadraticCurveTo(x + w, y, x + w, y + r)
-    ctx.lineTo(x + w, y + h - r)
-    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h)
-    ctx.lineTo(x + r, y + h)
-    ctx.quadraticCurveTo(x, y + h, x, y + h - r)
-    ctx.lineTo(x, y + r)
-    ctx.quadraticCurveTo(x, y, x + r, y)
-    ctx.closePath()
+    ctx.fillText(text, this.canvas.clientWidth / 2, this.canvas.clientHeight - 50 * scale)
   }
 }

@@ -1,38 +1,26 @@
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
+import { JOINT_CONFIG } from '../core/landmarks.js'
 
 const WASM_CDN  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm'
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
 const MIN_VISIBILITY = 0.3
 
-// MediaPipe landmark indices (subject-anatomical left/right).
-// proximal/joint/distal can be:
-//   - a number: single landmark index
-//   - { midpoint: [a, b] }: average of two landmarks (visibility = max of the two)
-const JOINT_CONFIG = {
-  knee: {
-    left:  { proximal: 23, joint: 25, distal: 27 },
-    right: { proximal: 24, joint: 26, distal: 28 },
-  },
-  hip: {
-    left:  { proximal: 11, joint: 23, distal: 25 },
-    right: { proximal: 12, joint: 24, distal: 26 },
-  },
-  shoulder: {
-    left:  { proximal: 13, joint: 11, distal: 23 },
-    right: { proximal: 14, joint: 12, distal: 24 },
-  },
-  elbow: {
-    left:  { proximal: 11, joint: 13, distal: 15 },
-    right: { proximal: 12, joint: 14, distal: 16 },
-  },
-  ankle: {
-    // Proximal = shin midpoint (knee + ankle average) so the knee can be
-    // partially out of frame while still capturing the shin's direction.
-    left:  { proximal: { midpoint: [25, 27] }, joint: 27, distal: 31 },
-    right: { proximal: { midpoint: [26, 28] }, joint: 28, distal: 32 },
-  },
-}
+/**
+ * Which model produced a session's landmarks, stamped onto the record.
+ *
+ * The validation dataset must be analysable by model version: the retained
+ * `verified - frameAngleRaw` delta characterises THIS model's bias, and
+ * records that cannot say which model they came from pool two different
+ * instruments into one distribution. Bump MODEL_VERSION whenever MODEL_URL or
+ * the @mediapipe/tasks-vision dependency changes.
+ */
+export const MODEL_ID      = 'blazepose-full'
+export const MODEL_VERSION = 'tasks-vision@0.10.35+float16/latest'
 
+// The landmark index table moved to core/landmarks.js — it is data about
+// anatomy, and the stored landmark set derives each point's `kind` from it, so
+// asking that question must not require importing MediaPipe. Re-exported here
+// because this remains the natural place to look for it.
 export { JOINT_CONFIG }
 
 export class PoseDetector {
