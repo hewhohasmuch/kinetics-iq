@@ -44,6 +44,28 @@ const HIT_RADIUS = 28
 const EDITOR_SCALE = 1
 /** Segment-length change past which the readout cautions. Advisory only. */
 const LENGTH_CAUTION = 0.15
+
+/**
+ * Speed-dependent drag gain — the finger moves the point by a FRACTION of its
+ * own travel when moving slowly, and 1:1 when moving fast.
+ *
+ * WHY: a stored frame is a few hundred CSS pixels tall, so one pixel of finger
+ * movement is worth a degree or more. Placing a point deliberately — which is
+ * the entire purpose of this screen — meant fighting that ratio, and landing on
+ * a particular reading was luck.
+ *
+ * This is the same trade the angle chain already makes with OneEuroFilter:
+ * calm and precise when little is happening, responsive when it is. Gross
+ * repositioning still moves 1:1 because it is fast; the last few pixels move at
+ * GAIN_MIN because they are slow.
+ *
+ * The consequence is that the point LAGS the finger during fine work. That is
+ * intended and visible — the dragged point carries a dashed ring and the loupe
+ * follows the point, not the finger.
+ */
+const GAIN_MIN = 0.22
+/** Finger speed (CSS px per ms) at which gain reaches 1:1. */
+const GAIN_FULL_SPEED = 0.7
 /**
  * The loupe. Size and zoom trade against each other: the source region it
  * samples is SIZE / (2 * ZOOM), so a bigger circle at slightly lower zoom shows
@@ -101,6 +123,11 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
     let img = null
     let dragging = null          // role currently under the finger
     let dpr = 1
+    // Last pointer sample, for the speed-dependent gain below. Dragging is
+    // RELATIVE to these, never absolute to the finger — that is what lets the
+    // point move more slowly than the hand.
+    let lastPt = null
+    let lastT = 0
 
     const url = URL.createObjectURL(blob)
     const image = new Image()
@@ -294,6 +321,8 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
       const role = nearestRole(pt)
       if (!role) return
       dragging = role
+      lastPt = pt
+      lastT = e.timeStamp
       canvas.setPointerCapture(e.pointerId)
       roleEl.textContent = roleLabel(joint, side, role)
       // Do NOT jump the point to the touch: the finger lands near, not on, and
@@ -305,7 +334,22 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
     canvas.addEventListener('pointermove', (e) => {
       if (!dragging) return
       const pt = localPoint(e)
-      working[dragging] = { ...working[dragging], ...toNormalized(pt.x, pt.y) }
+
+      const dx = pt.x - (lastPt?.x ?? pt.x)
+      const dy = pt.y - (lastPt?.y ?? pt.y)
+      // Guard the divisor: coalesced pointer events can share a timestamp.
+      const dt = Math.max(1, e.timeStamp - lastT)
+      const speed = Math.hypot(dx, dy) / dt
+      const gain = GAIN_MIN + (1 - GAIN_MIN) * Math.min(1, speed / GAIN_FULL_SPEED)
+
+      const cur = toDisplay(working[dragging])
+      working[dragging] = {
+        ...working[dragging],
+        ...toNormalized(cur.x + dx * gain, cur.y + dy * gain),
+      }
+
+      lastPt = pt
+      lastT = e.timeStamp
       draw()
       e.preventDefault()
     })
@@ -313,6 +357,7 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
     const endDrag = (e) => {
       if (!dragging) return
       dragging = null
+      lastPt = null
       roleEl.textContent = ''
       draw()
       if (e?.pointerId !== undefined && canvas.hasPointerCapture?.(e.pointerId)) {
@@ -418,8 +463,9 @@ function template(joint, which) {
       <div class="lm-head">
         <div class="lm-title">Verify landmarks — ${end}</div>
         <div class="lm-sub">
-          Drag each point onto the joint centre you can see. This records an
-          observation on this frame only; the recording itself is not changed.
+          Drag each point onto the joint centre you can see — drag slowly for
+          fine control. This records an observation on this frame only; the
+          recording itself is not changed.
         </div>
       </div>
       <div id="lm-stage">

@@ -172,6 +172,52 @@ try {
     'y ' + boxBefore.y + ' -> ' + boxAfter.y + ', h ' + boxBefore.height + ' -> ' + boxAfter.height)
 
   console.log('\n4. Saving records an endpoint observation, not a rewrite')
+  console.log('')
+  console.log('3b. A slow drag moves the point less than a fast one')
+  // The precision aid: gain scales with finger speed, so deliberate movement
+  // buys fine control. Playwright dispatches stepped moves back-to-back, so a
+  // "slow" drag has to be paced with real delays or it is just as fast.
+  const angleNow = async () => parseFloat(await page.textContent('#lm-angle'))
+  const jointAt = { x: box.x + box.width * 0.5, y: box.y + box.height * 0.6 }
+  const TRAVEL = box.height * 0.22
+
+  await page.click('#lm-reset')
+  await page.waitForTimeout(120)
+  const base = await angleNow()
+
+  // Fast: one hop, so dt is ~1ms and gain saturates at 1:1.
+  await page.mouse.move(jointAt.x, jointAt.y)
+  await page.mouse.down()
+  await page.mouse.move(jointAt.x, jointAt.y + TRAVEL)
+  await page.mouse.up()
+  await page.waitForTimeout(120)
+  const fastDelta = Math.abs((await angleNow()) - base)
+
+  await page.click('#lm-reset')
+  await page.waitForTimeout(120)
+
+  // Slow: the same total travel, paced so each sample is a low speed.
+  await page.mouse.move(jointAt.x, jointAt.y)
+  await page.mouse.down()
+  for (let i = 1; i <= 12; i++) {
+    await page.mouse.move(jointAt.x, jointAt.y + (TRAVEL * i) / 12)
+    await page.waitForTimeout(25)
+  }
+  await page.mouse.up()
+  await page.waitForTimeout(120)
+  const slowDelta = Math.abs((await angleNow()) - base)
+
+  check('the same travel moves the point LESS when dragged slowly',
+    slowDelta < fastDelta * 0.85 && slowDelta > 0,
+    'slow ' + slowDelta.toFixed(1) + ' vs fast ' + fastDelta.toFixed(1) + ' degrees')
+
+  // Leave a real verification behind for the checks that follow.
+  await page.mouse.move(jointAt.x, jointAt.y)
+  await page.mouse.down()
+  await page.mouse.move(jointAt.x, jointAt.y + TRAVEL)
+  await page.mouse.up()
+  await page.waitForTimeout(150)
+
   await page.click('#lm-save')
   await page.waitForTimeout(900)
 
