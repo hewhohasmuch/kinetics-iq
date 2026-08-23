@@ -55,6 +55,7 @@
 import { sessionReportModel, ATTRIBUTION } from './report.js'
 import { extremeLabels, jointLabel, formatSessionDate } from './labels.js'
 import { reportedExtremes } from './extremes.js'
+import { renderFrame, frameLandmarks } from './frameRender.js'
 
 // US Letter in points. Portrait: a page filed alongside other chart documents.
 const PAGE = { w: 612, h: 792 }
@@ -278,11 +279,23 @@ async function drawFrames(doc, y, session, images) {
   // The reported minimum, so a caption can never name a different motion from
   // the stat card above it — extremeLabels decides between "Peak extension" and
   // "Min flexion", which are claims about different things.
-  const { maxLabel, minLabel } = extremeLabels(session.joint, reportedExtremes(session).reportedMin)
-  const specs = [
-    { which: 'peak', caption: maxLabel, blob: images.peak ?? null },
-    { which: 'min',  caption: minLabel, blob: images.min  ?? null },
-  ]
+  const e = reportedExtremes(session)
+  const { maxLabel, minLabel } = extremeLabels(session.joint, e.reportedMin)
+
+  // The overlay is drawn onto the stored frame HERE, from the same reported
+  // values printed above it, rather than having been burned in at capture. A
+  // legacy session has no stored landmarks and gets its baked composite back
+  // unchanged — never a second skeleton drawn over the first.
+  const specs = await Promise.all([
+    { which: 'peak', caption: maxLabel, blob: images.peak ?? null, angle: e.reportedMax },
+    { which: 'min',  caption: minLabel, blob: images.min  ?? null, angle: e.reportedMin },
+  ].map(async (spec) => ({
+    ...spec,
+    blob: spec.blob
+      ? await renderFrame(spec.blob, frameLandmarks(session, spec.which),
+                          { joint: session.joint, labelAngle: spec.angle })
+      : null,
+  })))
 
   const gap    = 16
   const cellW  = (CONTENT_W - gap) / 2

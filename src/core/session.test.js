@@ -446,3 +446,119 @@ describe('measurement position', () => {
   })
 
 })
+
+// ─── Landmark evidence (PR 2) ────────────────────────────────────────────────
+
+describe('landmark evidence', () => {
+
+  const set = (x) => ({
+    proximal: { x, y: 0.2, visibility: 0.9, kind: 'anatomical' },
+    joint:    { x, y: 0.5, visibility: 0.9, kind: 'anatomical' },
+    distal:   { x, y: 0.8, visibility: 0.9, kind: 'anatomical' },
+  })
+
+  function run(evidence = {}) {
+    const r = new SessionRecorder()
+    r.setContext('knee', 'right', 'supine')
+    r.setModel('blazepose-full', 'tasks-vision@0.10.35+float16/latest')
+    r.start()
+    r.record(5); r.record(60); r.record(120)
+    for (const [which, e] of Object.entries(evidence)) r.setExtremeEvidence(which, e)
+    return r.stop()
+  }
+
+  it('stamps the landmark space unconditionally', () => {
+    // It describes HOW THE FRAMES WERE STORED, not whether landmarks resolved.
+    // Absence must keep meaning "recorded before landmark capture existed",
+    // whose stored image is the legacy baked composite.
+    expect(run().landmarkSpace).toBe('video1')
+  })
+
+  it('stamps which model produced the landmarks', () => {
+    const s = run()
+    expect(s.modelId).toBe('blazepose-full')
+    expect(s.modelVersion).toBe('tasks-vision@0.10.35+float16/latest')
+  })
+
+  it('maps max evidence to the PEAK slot and min to min', () => {
+    const s = run({ max: { set: set(0.7), rawAngle: 121.4, tilt: 8.2 },
+                    min: { set: set(0.3), rawAngle: 4.9,   tilt: 3.1 } })
+    expect(s.landmarksRaw.peak).toEqual(set(0.7))
+    expect(s.landmarksRaw.min).toEqual(set(0.3))
+    expect(s.frameAngleRawMax).toBe(121.4)
+    expect(s.frameAngleRawMin).toBe(4.9)
+    expect(s.frameTiltMax).toBe(8.2)
+    expect(s.frameTiltMin).toBe(3.1)
+  })
+
+  it('keeps the raw frame angle DISTINCT from the filtered min/max', () => {
+    // The delta a verification is measured against is `verified − frameAngleRaw`.
+    // Comparing against the filtered, calibrated max would fold the filter's
+    // behaviour into a measurement of landmark bias.
+    const s = run({ max: { set: set(0.7), rawAngle: 118.2, tilt: null } })
+    expect(s.max).toBe(120)
+    expect(s.frameAngleRawMax).toBe(118.2)
+  })
+
+  it('leaves an end null when that extreme was never captured', () => {
+    const s = run({ max: { set: set(0.7), rawAngle: 121.4, tilt: 8.2 } })
+    expect(s.landmarksRaw.min).toBeNull()
+    expect(s.frameAngleRawMin).toBeNull()
+    expect(s.frameTiltMin).toBeNull()
+  })
+
+  it('stores a picture with a null set when landmarks did not resolve', () => {
+    const s = run({ max: { set: null, rawAngle: null, tilt: null } })
+    expect(s.landmarkSpace).toBe('video1')   // still a clean frame
+    expect(s.landmarksRaw.peak).toBeNull()
+  })
+
+  it('survives a measured tilt of exactly 0 as 0, not as never-measured', () => {
+    const s = run({ max: { set: set(0.7), rawAngle: 90, tilt: 0 } })
+    expect(s.frameTiltMax).toBe(0)
+    expect(s.frameTiltMin).toBeNull()
+  })
+
+  it('keeps a NEGATIVE raw frame angle signed', () => {
+    const s = run({ min: { set: set(0.3), rawAngle: -4.26, tilt: null } })
+    expect(s.frameAngleRawMin).toBe(-4.3)
+  })
+
+  it('rounds frame angles and tilts to 1dp like every other stored angle', () => {
+    const s = run({ max: { set: set(0.7), rawAngle: 121.4444, tilt: 8.2666 } })
+    expect(s.frameAngleRawMax).toBe(121.4)
+    expect(s.frameTiltMax).toBe(8.3)
+  })
+
+  it('ignores evidence offered while not recording', () => {
+    const r = new SessionRecorder()
+    r.setExtremeEvidence('max', { set: set(0.7), rawAngle: 100, tilt: 1 })
+    r.setContext('knee', 'right', 'supine')
+    r.start()
+    r.record(5); r.record(120)
+    expect(r.stop().landmarksRaw.peak).toBeNull()
+  })
+
+  it('clears evidence from a previous bout on start()', () => {
+    const r = new SessionRecorder()
+    r.setContext('knee', 'right', 'supine')
+    r.start()
+    r.record(5); r.record(120)
+    r.setExtremeEvidence('max', { set: set(0.7), rawAngle: 100, tilt: 1 })
+    r.stop()
+
+    r.start()
+    r.record(10); r.record(90)
+    expect(r.stop().landmarksRaw.peak).toBeNull()
+  })
+
+  it('records null model stamps when none were supplied', () => {
+    const r = new SessionRecorder()
+    r.setContext('knee', 'right', 'supine')
+    r.start()
+    r.record(5); r.record(120)
+    const s = r.stop()
+    expect(s.modelId).toBeNull()
+    expect(s.modelVersion).toBeNull()
+  })
+})

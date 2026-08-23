@@ -21,6 +21,17 @@
  */
 
 import { generateId } from './id.js'
+import { LANDMARK_SPACE } from './landmarks.js'
+
+/**
+ * Round to 1dp like every other stored angle, preserving the null/undefined
+ * distinction: `0` is a measurement and must survive as `0`, while absence
+ * stays absence rather than becoming a number.
+ */
+function _round1(v) {
+  if (v === null || v === undefined || isNaN(v)) return null
+  return Math.round(v * 10) / 10
+}
 
 export class SessionRecorder {
   constructor() {
@@ -33,6 +44,54 @@ export class SessionRecorder {
     this._calOffset = null    // null = no calibration state supplied
     this._calibrated = null
     this._maxTilt   = null    // null = never measured, distinct from 0
+    this._modelId      = null
+    this._modelVersion = null
+    // Per-extreme evidence, captured with each snapshot. See setExtremeEvidence.
+    this._evidence = { max: null, min: null }
+  }
+
+  /**
+   * Which model produced these landmarks. Call before start(), alongside
+   * setContext().
+   *
+   * The validation dataset has to be analysable BY MODEL VERSION — the whole
+   * point of retaining `verified - frameAngleRaw` is to characterise this
+   * model's bias, and a record that cannot say which model it came from
+   * silently pools two different instruments into one distribution.
+   *
+   * @param {string|null} modelId
+   * @param {string|null} modelVersion
+   */
+  setModel(modelId, modelVersion) {
+    this._modelId      = modelId ?? null
+    this._modelVersion = modelVersion ?? null
+  }
+
+  /**
+   * Record the raw evidence for one extreme frame, at the moment its snapshot
+   * is taken. Overwrites whatever extreme was held before, exactly as the
+   * retained canvas does — a sweep produces many successive new extremes and
+   * only the last survives.
+   *
+   * THE ANGLE HERE IS NOT `min`/`max`. It is the UNFILTERED, UNCALIBRATED
+   * angle computed straight from these landmarks, while min/max are the
+   * filtered and calibrated values. The research delta is
+   * `verified - frameAngleRaw`, and comparing a verified recompute against a
+   * filtered number would fold the filter's behaviour into what is supposed to
+   * be a measurement of landmark bias.
+   *
+   * THE TILT IS PER-FRAME, not the session worst. `maxSegmentTilt` cannot
+   * answer "was THIS frame off-axis", which is a covariate the dataset needs,
+   * and it can never be recomputed later — segmentTilt() needs the world
+   * landmarks, which a dragged 2D point does not have.
+   *
+   * @param {'max'|'min'} which
+   * @param {{set: object|null, rawAngle: number|null, tilt: number|null}} evidence
+   */
+  setExtremeEvidence(which, evidence) {
+    if (!this._active) return
+    if (which !== 'max' && which !== 'min') return
+    this._evidence[which] = evidence ?? null
   }
 
   // Set the joint, side, and position before start() so they appear in the saved session.
@@ -83,6 +142,7 @@ export class SessionRecorder {
     this._startTime = Date.now()
     this._active    = true
     this._maxTilt   = null
+    this._evidence  = { max: null, min: null }
   }
 
   /**
@@ -191,6 +251,29 @@ export class SessionRecorder {
       // image BYTES never live on the session object — that filled localStorage.
       peakFramePath: null,
       minFramePath:  null,
+
+      // ── Landmark evidence ────────────────────────────────────────────
+      // Stamped unconditionally by this build, because it describes HOW THE
+      // FRAMES WERE STORED, not whether landmarks happened to resolve: every
+      // snapshot this build writes is a clean frame with coordinates in
+      // normalized video space. Absence therefore still means exactly what the
+      // 0006 migration says — a session from before landmark capture, whose
+      // stored image is the legacy composite with the overlay burned in.
+      landmarkSpace: LANDMARK_SPACE,
+      modelId:       this._modelId,
+      modelVersion:  this._modelVersion,
+      // IMMUTABLE once written. This is the baseline the research delta is
+      // measured against forever; a verification is stored beside it, never
+      // over it. Either end can be null — a frame captured while a landmark was
+      // below the visibility threshold has a picture but nothing to draw on it.
+      landmarksRaw: {
+        peak: this._evidence.max?.set ?? null,
+        min:  this._evidence.min?.set ?? null,
+      },
+      frameAngleRawMax: _round1(this._evidence.max?.rawAngle),
+      frameAngleRawMin: _round1(this._evidence.min?.rawAngle),
+      frameTiltMax:     _round1(this._evidence.max?.tilt),
+      frameTiltMin:     _round1(this._evidence.min?.tilt),
     }
   }
 

@@ -206,6 +206,39 @@ async function main() {
       pass(`calibration offset stamped (${s.calibrationOffset}°)`)
     else fail(`expected calibrationOffset 0, got ${JSON.stringify(s.calibrationOffset)}`)
 
+    // ── Landmark evidence ────────────────────────────────────────────
+    // The frames are now stored CLEAN and the overlay is drawn at view time,
+    // so the session has to carry the coordinates to draw. Absence here would
+    // not fail loudly — it would silently produce un-annotated pictures.
+    if (s.landmarkSpace === 'video1')
+      pass("landmarkSpace: video1 — frames stored clean, overlay drawn at view time")
+    else fail(`landmarkSpace is ${JSON.stringify(s.landmarkSpace)}, expected 'video1'`)
+
+    if (s.modelId && s.modelVersion)
+      pass(`model stamped (${s.modelId} ${s.modelVersion})`)
+    else fail(`model stamps missing: ${JSON.stringify({ id: s.modelId, v: s.modelVersion })}`)
+
+    for (const which of ['peak', 'min']) {
+      const set = s.landmarksRaw?.[which]
+      const ok = set && ['proximal', 'joint', 'distal'].every(
+        (r) => set[r] && Number.isFinite(set[r].x) && Number.isFinite(set[r].y)
+      )
+      if (!ok) { fail(`${which} landmark set missing or incomplete`); continue }
+      // Normalized fractions of the frame buffer — never pixels. A value
+      // outside 0..1 means a display transform leaked into the stored record.
+      const inRange = ['proximal', 'joint', 'distal'].every(
+        (r) => set[r].x >= 0 && set[r].x <= 1 && set[r].y >= 0 && set[r].y <= 1
+      )
+      if (inRange) pass(`${which} landmarks stored normalized (0..1) with kind`)
+      else fail(`${which} landmarks outside 0..1 — a display transform leaked in`)
+    }
+
+    // The unfiltered angle at each extreme, kept as the baseline a clinician's
+    // verification is measured against. It must NOT equal the filtered min/max.
+    if (Number.isFinite(s.frameAngleRawMax) && Number.isFinite(s.frameAngleRawMin))
+      pass(`raw frame angles captured (${s.frameAngleRawMin}° / ${s.frameAngleRawMax}°)`)
+    else fail(`raw frame angles missing: ${JSON.stringify([s.frameAngleRawMin, s.frameAngleRawMax])}`)
+
     // Read the blobs back out of IndexedDB (real store in headless Chromium).
     // Poll briefly — persistence is async, running just after the save.
     let imgs = []
@@ -240,7 +273,8 @@ async function main() {
     const shot = join(FIXTURE_DIR, 'session-detail.png')
     await page.screenshot({ path: shot })
     pass(`SessionDetail rendered — screenshot: ${shot}`)
-    info('check by eye: the angle burned into each frame should match its caption')
+    info('check by eye: the overlay is now DRAWN at view time from the saved record —')
+    info('each frame should show dots, bones, arc and an angle matching its caption')
 
     console.log('\n6. Console health')
     const real = consoleErrors.filter((e) => !/ERR_CERT|self.signed|favicon/i.test(e))
