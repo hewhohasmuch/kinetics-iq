@@ -140,9 +140,14 @@ try {
   await page.mouse.move(from.x, from.y)
   await page.mouse.down()
   await page.mouse.move(to.x, to.y, { steps: 12 })
+  // Captured while the pointer is still DOWN — the loupe only exists during a
+  // drag, so a shot taken after release can never show it.
+  await page.waitForTimeout(150)
+  await page.screenshot({ path: 'tmp/verify-landmarks-editor.png' })
+  const loupeVisible = await page.locator('#lm-loupe').isVisible()
   await page.mouse.up()
   await page.waitForTimeout(200)
-  await page.screenshot({ path: 'tmp/verify-landmarks-editor.png' })
+  check('loupe is shown while dragging', loupeVisible)
   const after = await page.textContent('#lm-angle')
   check('angle changed while dragging', before !== after, `${before} -> ${after}`)
   check('a segment-length advisory is shown',

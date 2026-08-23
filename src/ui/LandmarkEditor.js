@@ -44,9 +44,15 @@ const HIT_RADIUS = 28
 const EDITOR_SCALE = 1
 /** Segment-length change past which the readout cautions. Advisory only. */
 const LENGTH_CAUTION = 0.15
-/** Magnification of the loupe. */
-const LOUPE_ZOOM = 3
-const LOUPE_SIZE = 104
+/**
+ * The loupe. Size and zoom trade against each other: the source region it
+ * samples is SIZE / (2 * ZOOM), so a bigger circle at slightly lower zoom shows
+ * more of the surrounding limb — which is what makes a joint centre findable at
+ * all. Placing a point against a magnified patch of skin with no landmarks in
+ * view is guesswork.
+ */
+const LOUPE_ZOOM = 2.8
+const LOUPE_SIZE = 150
 
 /**
  * Human label for one draggable point.
@@ -207,6 +213,13 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
       loupe.style.display = 'block'
       const { w, h } = cssSize()
       const p = toDisplay(working[dragging])
+
+      // Sit on the opposite side from the point being dragged. A fixed corner
+      // covers the very thing the clinician is trying to place as soon as they
+      // work near it — which defeats the loupe's only purpose.
+      const onRight = p.x > w * 0.5
+      loupe.style.left  = onRight ? '12px' : 'auto'
+      loupe.style.right = onRight ? 'auto' : '12px'
       // Source rect in IMAGE pixels, centred on the point.
       const sx = (p.x / w) * img.width
       const sy = (p.y / h) * img.height
@@ -223,8 +236,15 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
       lctx.strokeStyle = MARKER_COLORS[dragging] ?? '#fff'
       lctx.lineWidth = 1.5
       lctx.beginPath()
-      lctx.moveTo(LOUPE_SIZE / 2 - 10, LOUPE_SIZE / 2); lctx.lineTo(LOUPE_SIZE / 2 + 10, LOUPE_SIZE / 2)
-      lctx.moveTo(LOUPE_SIZE / 2, LOUPE_SIZE / 2 - 10); lctx.lineTo(LOUPE_SIZE / 2, LOUPE_SIZE / 2 + 10)
+      // Proportional to the loupe, with a gap at the centre so the crosshair
+      // marks the spot without covering the pixels being judged.
+      const arm = LOUPE_SIZE / 11
+      const gap = arm / 3
+      const c = LOUPE_SIZE / 2
+      lctx.moveTo(c - arm, c); lctx.lineTo(c - gap, c)
+      lctx.moveTo(c + gap, c); lctx.lineTo(c + arm, c)
+      lctx.moveTo(c, c - arm); lctx.lineTo(c, c - gap)
+      lctx.moveTo(c, c + gap); lctx.lineTo(c, c + arm)
       lctx.stroke()
       lctx.restore()
       lctx.beginPath()
@@ -313,6 +333,14 @@ function template(joint, which) {
         background: rgba(0,0,0,0.82);
         display: flex; align-items: center; justify-content: center;
         padding: 12px;
+        /* iOS Safari raises its own text-selection magnifier on a long press,
+           and it lands directly over the frame being edited — a second lens
+           showing the wrong thing. touch-action on the canvas stops scrolling
+           and pinch-zoom but NOT this; only disabling the callout and selection
+           does. Nothing in this modal needs to be selectable. */
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
       }
       .lm-card {
         background: #141414; border-radius: 14px; overflow: hidden;
@@ -330,6 +358,7 @@ function template(joint, which) {
       #lm-canvas { touch-action: none; display: block; border-radius: 6px; }
       #lm-loupe {
         position: absolute; top: 12px; right: 12px;
+        /* Side is set per-drag in drawLoupe(); this is only the initial corner. */
         width: ${LOUPE_SIZE}px; height: ${LOUPE_SIZE}px;
         border-radius: 50%; display: none; pointer-events: none;
       }
