@@ -15,7 +15,7 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 - Chromium flags: `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream --use-file-for-fake-video-capture=<file>.y4m`.
 - MediaPipe BlazePose detects a real-person photo fine. A known-good CC0 test image: `https://storage.googleapis.com/mediapipe-assets/pose.jpg` (yoga warrior pose, bent right knee ≈ 83° flexion).
 - The bundled Playwright ffmpeg cannot decode JPEG/PPM — write the y4m directly with PIL (`YUV4MPEG2 W640 H480 F10:1 Ip A1:1 C420jpeg\n` header, then `FRAME\n` + Y + subsampled U + V per frame).
-- To make the measured angle *change* mid-video, mirror the image for the second half (`ImageOps.mirror`) — the subject's right knee then maps to the other (straight) leg. Geometric squash/stretch does NOT work: the app uses MediaPipe's 3D world landmarks, which normalize away image-space distortion.
+- To make the measured angle *change* mid-video, mirror the image for the second half (`ImageOps.mirror`) — the subject's right knee then maps to the other (straight) leg. Mirroring changes the *pose*; prefer it to a geometric squash, which would deform the subject rather than move a limb. (The note that used to sit here — that squash/stretch cannot work because the app measures from 3D world landmarks — stopped being true in #28, when the angle moved to the 2D image landmarks.)
 
 ## Network gotchas (remote sandbox)
 
@@ -28,12 +28,22 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 - Seed `rom_patients` + `rom_settings` (`active_patient_id`) via `addInitScript` to boot straight into MeasureView; recording is blocked without an active patient.
 - **`addInitScript` passes exactly ONE argument** to the page function. A second one arrives as `undefined`, and `localStorage.setItem(k, JSON.stringify(undefined))` stores the *string* `"undefined"`, which surfaces far away as `migrateInlineImages failed: SyntaxError: "undefined" is not valid JSON` on boot. Pass a single object.
 - To verify anything downstream of a recording (History, SessionDetail), **seed `rom_sessions` directly and skip the camera** — it turns a multi-minute run into a few seconds. Sessions need `id` (a real UUID; `sess_*` ids are treated as legacy and stay local-only), `patient_id`, `date` `'YYYY-MM-DD'`, `timestamp`, `min`/`max`/`rom`, `samples`, `duration_s`, `angleTimeline`, `updated_at`. Omit `angleConvention`/`angleFilter` to make one legacy, or set `calibrated`/`calibrationOffset` to exercise the provenance chips.
+- To exercise anything to do with the stored frames or **landmark verification**, the session also needs `landmarkSpace: 'video1'` and `landmarksRaw: { peak, min }`, each set being `{proximal, joint, distal}` of `{x, y, visibility, kind}` with x/y as **normalized fractions**. Omit `landmarkSpace` to make a session legacy — its stored image is then treated as a baked composite and is never drawn over. Add `verifications: [record]` to start from an already-verified session. **Use a BENT set**: collinear points stay collinear under any affine transform, so they read 0° at every resolution and will make a scale- or aspect-related test pass vacuously.
 - Key ids: `#btn-start-camera`, `#angle-display` (readout, `--°` until pose found), `#btn-calibrate` (Set Zero, ~2s sampling), `#btn-record-start/stop`, `#btn-notes-skip`, `#btn-history`, `.session-row`, `#btn-signout`, `#btn-new-patient`, `#pf-name`, `.form-save`, login: `#login-email/password/submit`.
 - `#btn-history` sits in the controls row, which is **hidden until the camera starts** — Playwright's `click()` waits for visibility and times out. When skipping the camera, wait for `state: 'attached'` and click it through `page.evaluate(() => document.getElementById('btn-history').click())`.
 - Model + first detection takes 30–90s headless; wait on `#angle-display` matching `/^-?\d+°$/` with a generous timeout. The `-?` is required — once Set Zero has been tapped, anything past the zero point in the extension direction renders negative.
 - `#btn-calibrate` sampling ends on its own after 20 detection frames, which headless (~2Hz) stretches to ~10–20s. Wait for its label to return to `Set Zero` rather than a fixed timeout, then read `#cal-status`.
 - SessionDetail's Chart.js has a 400ms entry animation — screenshot too early and the timeline line renders near zero; wait ~1s after the view mounts.
-- The overlay angle label is canvas-drawn; assert it by screenshotting and reading the image, not via DOM.
+- The overlay angle label is canvas-drawn; assert it by screenshotting and reading the image, not via DOM. Note it is drawn at *view time* from the saved record now, not burned in at capture — so a frame with no overlay means the landmark set never reached the session, not that the capture failed.
+
+## Landmark verification (the editor)
+
+`scripts/verify-landmark-verification.mjs` drives the whole loop; extend that rather than starting over. Ids: `.btn-verify[data-which="peak"|"min"]`, `#btn-unverify`, and inside the modal `#lm-canvas`, `#lm-loupe`, `#lm-angle`, `#lm-lengths`, `#lm-role`, `#lm-cancel`, `#lm-reset`, `#lm-save`.
+
+- Drag with `page.mouse` (the canvas uses pointer events and `touch-action: none`). Points are at normalized positions, so a point seeded at `(0.5, 0.6)` is at `box.x + box.width*0.5, box.y + box.height*0.6`.
+- **The drag gain scales with finger speed**, so a "slow" drag has to be paced with real `waitForTimeout` between moves. Playwright dispatches `{steps: n}` moves back-to-back, which is a *fast* drag no matter how many steps — a fine-control test written that way passes whether or not the feature works.
+- The **loupe only exists during a drag**. Screenshot between `mouse.down()` and `mouse.up()` or it is never in frame.
+- Asserting the image does not move while text below it changes needs the caption **forced** to wrap (set `#lm-lengths` textContent to something long). At a desktop viewport the real string stays on one line, so a guard that waits for the natural case passes with the layout bug still present.
 
 ## "Copy for note" (SessionDetail export)
 
