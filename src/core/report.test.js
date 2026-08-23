@@ -322,12 +322,29 @@ describe('verification in the report model', () => {
     // the raw timeline and can legitimately be narrower — printing it
     // unattributed would read as the same measurement having improved.
     const m = sessionReportModel(verifiedSession({ min: 10, max: 100 }))
-    expect(m.romLine).toMatch(/between clinician-verified endpoints/)
+    expect(m.romAttribution).toMatch(/clinician-verified endpoints/)
     expect(m.romLine).toMatch(/10° – 100°/)
   })
 
+  it('keeps the qualifier OUT of the headline, which cannot wrap', () => {
+    // The PDF draws romLine at 24pt with no wrapping, so anything appended
+    // there runs off the page. This shipped truncated once.
+    const m = sessionReportModel(verifiedSession({ min: 10, max: 100 }))
+    expect(m.romLine).not.toMatch(/verified/)
+    expect(m.romLine.length).toBeLessThan(40)
+  })
+
+  it('states the qualifier in the note, next to the figure it qualifies', () => {
+    const l = lines(verifiedSession({ min: 10, max: 100 }))
+    const romAt = l.findIndex(x => /^ROM /.test(x))
+    expect(romAt).toBeGreaterThanOrEqual(0)
+    expect(l[romAt + 1]).toMatch(/clinician-verified endpoints/)
+  })
+
   it('leaves the ROM line unattributed when nothing was verified', () => {
-    expect(sessionReportModel(makeSession()).romLine).not.toMatch(/verified/)
+    const m = sessionReportModel(makeSession())
+    expect(m.romLine).not.toMatch(/verified/)
+    expect(m.romAttribution).toBeNull()
   })
 
   it('reports the verified numbers, not the stored ones', () => {

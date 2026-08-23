@@ -198,9 +198,28 @@ async function renderSessionPage(doc, session, images) {
 
   // ── The measurement. The arc leads, at a size that reads across a desk.
   setInk(doc, COLOR.accent)
-  doc.setFont('helvetica', 'bold').setFontSize(24)
+  doc.setFont('helvetica', 'bold')
+  // Shrink to fit rather than run off the page. A headline is one line by
+  // definition, and this one has already overflowed once — a long joint name
+  // beside three-digit angles is enough to do it again.
+  fitFontSize(doc, winAnsi(m.romLine), CONTENT_W, 24, 13)
   doc.text(winAnsi(m.romLine), MARGIN, y + 8)
   y += 34
+
+  // The qualifier, in small type directly under the number it qualifies —
+  // never appended to the headline, which cannot wrap.
+  //
+  // Drawn at `y` (already advanced past the headline), NOT at an offset back
+  // into it: the headline is 24pt, so anything within ~14pt of its baseline
+  // collides with its descenders. An earlier attempt used y-20 and printed the
+  // two on top of each other.
+  if (m.romAttribution) {
+    setInk(doc, COLOR.muted)
+    doc.setFont('helvetica', 'normal').setFontSize(9)
+    const wrapped = doc.splitTextToSize(winAnsi(m.romAttribution), CONTENT_W)
+    doc.text(wrapped, MARGIN, y)
+    y += wrapped.length * 11 + 4
+  }
 
   // Both extremes, named per joint and per side of zero.
   setInk(doc, COLOR.ink)
@@ -272,6 +291,24 @@ function drawVerification(doc, y, v) {
   doc.text(body, MARGIN + 12, y + 26)
 
   return y + h + 10
+}
+
+/**
+ * Reduce the font size until `text` fits `maxW`, down to `min`.
+ *
+ * jsPDF's text() neither wraps nor clips — an over-long string simply runs past
+ * the page edge and is silently lost at the margin, which is how the ROM
+ * headline shipped truncated. Sizes are set on the doc as a side effect,
+ * matching how the rest of this module drives jsPDF.
+ */
+function fitFontSize(doc, text, maxW, start, min) {
+  let size = start
+  doc.setFontSize(size)
+  while (size > min && doc.getTextWidth(text) > maxW) {
+    size -= 1
+    doc.setFontSize(size)
+  }
+  return size
 }
 
 /**

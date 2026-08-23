@@ -73,7 +73,7 @@ export const ATTRIBUTION = 'Measured with KineticsIQ'
  *
  * @param {Session} session
  * @returns {{
- *   heading: string, dateLine: string, romLine: string,
+ *   heading: string, dateLine: string, romLine: string, romAttribution: string|null,
  *   maxLabel: string, maxValue: string, minLabel: string, minValue: string,
  *   durationLine: string, calibrationLine: string,
  *   verification: {level: string, label: string, detail: string, attribution: string|null},
@@ -126,12 +126,19 @@ export function sessionReportModel(session) {
 
     // The arc is the finding; the total is secondary. A knee lacking 5° of
     // extension and one with full extension subtract to the same total.
-    romLine: e.endpointsOnly
-      // ROM between verified endpoints is a DIFFERENT QUANTITY from ROM across
-      // the raw timeline and can legitimately be narrower. Printing it
-      // unattributed would read as the same measurement having improved.
-      ? `ROM ${romArc(reportedMin, reportedMax)} (${reportedRom}° total, between clinician-verified endpoints)`
-      : `ROM ${romArc(reportedMin, reportedMax)} (${reportedRom}° total)`,
+    // The headline stays SHORT. It is drawn at 24pt in the PDF with no
+    // wrapping, so anything appended here runs straight off the page — which
+    // is exactly what an earlier version of this did.
+    romLine: `ROM ${romArc(reportedMin, reportedMax)} (${reportedRom}° total)`,
+
+    // The qualifier travels as its own field for the same reason `warnings`
+    // carries no glyph: the two media place it differently — the note as the
+    // next line, the PDF as small type under the number. ROM between verified
+    // endpoints is a DIFFERENT QUANTITY from ROM across the raw timeline and
+    // can legitimately be narrower, so the figure must never stand unqualified.
+    romAttribution: e.endpointsOnly
+      ? 'Range is between clinician-verified endpoints, not across the whole recording'
+      : null,
 
     maxLabel,
     maxValue: `${reportedMax}°`,
@@ -175,6 +182,7 @@ export function sessionNoteText(session) {
     m.heading,
     m.dateLine,
     m.romLine,
+    ...(m.romAttribution ? [m.romAttribution] : []),
     `${m.maxLabel} ${m.maxValue}`,
     `${m.minLabel} ${m.minValue}`,
     m.durationLine,

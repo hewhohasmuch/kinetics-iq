@@ -26,16 +26,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /** Every text()/addImage() call the module makes, in order. */
 let drawn
+/**
+ * The stub models text WIDTH, not just calls, because pdf.js now shrinks the
+ * ROM headline to fit. A stub returning 0 would let an overflowing headline
+ * pass the tests and ship truncated — which is exactly what happened once.
+ */
+let fontSize = 10
 
 const docStub = {
   text: vi.fn((s, x, y) => {
-    for (const line of Array.isArray(s) ? s : [s]) drawn.texts.push(String(line))
+    for (const line of Array.isArray(s) ? s : [s]) {
+      drawn.texts.push(String(line))
+      drawn.sized.push({ text: String(line), size: fontSize })
+    }
   }),
   addImage:  vi.fn((...a) => drawn.images.push(a)),
   addPage:   vi.fn(() => { drawn.pages++ }),
   splitTextToSize: (s, _w) => String(s).split('\n'),
   setFont: vi.fn(() => docStub),
-  setFontSize: vi.fn(() => docStub),
+  setFontSize: vi.fn((s) => { fontSize = s; return docStub }),
+  // Rough but monotonic in both length and size, which is all the fit loop needs.
+  getTextWidth: vi.fn((s) => String(s).length * fontSize * 0.5),
   setTextColor: vi.fn(() => docStub),
   setFillColor: vi.fn(() => docStub),
   setDrawColor: vi.fn(() => docStub),
@@ -79,7 +90,8 @@ function fakeJpeg() {
 }
 
 beforeEach(() => {
-  drawn = { texts: [], images: [], pages: 1 }
+  drawn = { texts: [], images: [], pages: 1, sized: [] }
+  fontSize = 10
   vi.clearAllMocks()
   // pdf.js measures the natural size of each snapshot before placing it.
   globalThis.createImageBitmap = vi.fn(async () => ({ width: 800, height: 1100, close() {} }))
@@ -451,5 +463,36 @@ describe('buildSessionPdf — verification is stated, never as a warning', () =>
     expect(fills).toContain('237,242,247')      // verification
     expect(fills).toContain('254,243,199')      // the caveat
     expect(allText()).toMatch(/CANNOT SHOW HYPEREXTENSION/)
+  })
+})
+
+describe('buildSessionPdf — the ROM headline never runs off the page', () => {
+
+  // PAGE 612 wide, MARGIN 54 each side.
+  const CONTENT_W = 612 - 54 * 2
+  const width = ({ text, size }) => text.length * size * 0.5
+  const headline = () => drawn.sized.find(d => /^ROM /.test(d.text))
+
+  it('fits the ordinary case at full size', async () => {
+    await buildSessionPdf([makeSession()])
+    const h = headline()
+    expect(h).toBeTruthy()
+    expect(width(h)).toBeLessThanOrEqual(CONTENT_W)
+  })
+
+  it('SHRINKS rather than overflowing when the numbers are long', async () => {
+    // This is the shipped bug: text() neither wraps nor clips, so an over-long
+    // headline is silently lost at the margin.
+    await buildSessionPdf([makeSession({ min: -123.4, max: 149.1, rom: 272.5 })])
+    const h = headline()
+    expect(width(h)).toBeLessThanOrEqual(CONTENT_W)
+  })
+
+  it('still prints the qualifier, just not inside the headline', async () => {
+    await buildSessionPdf([makeSession({
+      verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles: { min: 10, max: 100 } }],
+    })])
+    expect(headline().text).not.toMatch(/verified/)
+    expect(allText()).toMatch(/clinician-verified endpoints/)
   })
 })
