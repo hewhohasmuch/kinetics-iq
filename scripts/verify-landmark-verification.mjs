@@ -133,7 +133,11 @@ try {
   check('editor shows a starting angle', /\d/.test(before), before)
 
   console.log('\n3. Dragging a landmark recomputes the angle')
-  const box = await page.locator('#lm-canvas').boundingBox()
+  // Captured BEFORE the drag so the image's position can be compared after the
+  // length advisory has grown. The stage used to absorb that growth, moving the
+  // image under the finger mid-placement.
+  const boxBefore = await page.locator('#lm-canvas').boundingBox()
+  const box = boxBefore
   // The joint point sits at normalized (0.5, 0.6) in the seeded set.
   const from = { x: box.x + box.width * 0.5, y: box.y + box.height * 0.6 }
   const to   = { x: box.x + box.width * 0.5, y: box.y + box.height * 0.85 }
@@ -152,6 +156,20 @@ try {
   check('angle changed while dragging', before !== after, `${before} -> ${after}`)
   check('a segment-length advisory is shown',
     ((await page.textContent('#lm-lengths')) || '').includes('Segment length'))
+
+  // FORCE the advisory to wrap rather than hoping this viewport makes it. On a
+  // phone with larger text it takes two lines and used to shove the image
+  // upward mid-drag; at this width the real string stays on one line, so a test
+  // that waited for that would pass whether or not the layout was fixed.
+  await page.evaluate(() => {
+    document.getElementById('lm-lengths').textContent =
+      'Segment length +100% / -100% vs model - check placement ' + 'wrap '.repeat(30)
+  })
+  await page.waitForTimeout(150)
+  const boxAfter = await page.locator('#lm-canvas').boundingBox()
+  check('the image does NOT move when the advisory wraps',
+    Math.abs(boxAfter.y - boxBefore.y) < 0.5 && Math.abs(boxAfter.height - boxBefore.height) < 0.5,
+    'y ' + boxBefore.y + ' -> ' + boxAfter.y + ', h ' + boxBefore.height + ' -> ' + boxAfter.height)
 
   console.log('\n4. Saving records an endpoint observation, not a rewrite')
   await page.click('#lm-save')

@@ -120,9 +120,25 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
     // ── Layout: the canvas takes the image's aspect exactly, so display
     // coordinates map to normalized ones by a single divide — no letterboxing
     // offsets to get wrong.
+    //
+    // THE STAGE HEIGHT IS PINNED, and that is not cosmetic. The stage was the
+    // flex item absorbing leftover space, so every time the length advisory
+    // below it grew a line the image TRANSLATED upward — mid-drag, under the
+    // finger, while the clinician was placing a point to a fraction of a
+    // degree. Reserving space for the advisory helps but cannot be relied on
+    // alone: a longer reading or a larger accessibility text size can still
+    // take a third line. Pinning makes the image's position independent of
+    // everything beneath it.
     function layout() {
-      const box = host.querySelector('#lm-stage').getBoundingClientRect()
-      const scale = Math.min(box.width / img.width, box.height / img.height)
+      const stage = host.querySelector('#lm-stage')
+      // The available box is derived from the VIEWPORT, not from whatever space
+      // happens to be left over after the text below is laid out. That is the
+      // whole point: the image's size and position must not depend on the
+      // length of a caption that changes while the clinician is dragging.
+      const availW = stage.getBoundingClientRect().width - 12
+      const availH = window.innerHeight * 0.52 - 12
+
+      const scale = Math.min(availW / img.width, availH / img.height)
       const cssW = Math.max(1, Math.floor(img.width * scale))
       const cssH = Math.max(1, Math.floor(img.height * scale))
       dpr = window.devicePixelRatio || 1
@@ -204,8 +220,11 @@ export function editLandmarks({ blob, set, rawSet, joint, side, which, calibrati
       const fmt = (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`
       const loud = Math.abs(p) > LENGTH_CAUTION || Math.abs(d) > LENGTH_CAUTION
       lenEl.className = loud ? 'lm-lengths caution' : 'lm-lengths'
-      lenEl.textContent = `Segment length ${fmt(p)} / ${fmt(d)} vs the model`
-        + (loud ? ' — worth a second look' : '')
+      // Kept short deliberately: the reserved block is two lines, and the
+      // standing explanation below already says what the numbers mean, so
+      // repeating it here only risks a third line and a moving image.
+      lenEl.textContent = `Segment length ${fmt(p)} / ${fmt(d)} vs model`
+        + (loud ? ' — check placement' : '')
     }
 
     function drawLoupe() {
@@ -331,7 +350,12 @@ function template(joint, which) {
       .lm-editor {
         position: fixed; inset: 0; z-index: 1100;
         background: rgba(0,0,0,0.82);
-        display: flex; align-items: center; justify-content: center;
+        /* Anchored to the TOP, not centred. A centred card is re-centred every
+           time its content changes height, so the length advisory growing a
+           line shifted the whole card — and the image with it — upward while a
+           point was being dragged. Anchoring means growth extends downward
+           into the controls instead, and the image never moves. */
+        display: flex; align-items: flex-start; justify-content: center;
         padding: 12px;
         /* iOS Safari raises its own text-selection magnifier on a long press,
            and it lands directly over the frame being edited — a second lens
@@ -350,8 +374,12 @@ function template(joint, which) {
       .lm-head { padding: 14px 16px 8px; }
       .lm-title { font-size: 1rem; font-weight: 600; color: #f5f5f5; }
       .lm-sub { font-size: 0.78rem; color: #9ca3af; margin-top: 4px; line-height: 1.4; }
+      /* Hugs the canvas rather than absorbing leftover space. Absorbing is
+         what let the image move: any change in the text below altered how much
+         space was left over. Bounded by viewport height so the controls stay
+         reachable on a short screen. */
       #lm-stage {
-        position: relative; flex: 1; min-height: 200px;
+        position: relative; flex: 0 0 auto; max-height: 52vh;
         display: flex; align-items: center; justify-content: center;
         background: #000; padding: 6px;
       }
@@ -368,7 +396,13 @@ function template(joint, which) {
       }
       .lm-angle { font-size: 1.6rem; font-weight: 700; color: #4ade80; }
       .lm-role { font-size: 0.78rem; color: #93c5fd; }
-      .lm-lengths { font-size: 0.72rem; color: #9ca3af; padding: 0 16px 8px; }
+      /* Two lines are reserved whether or not they are used, so the block does
+         not change height as the reading changes. Combined with the pinned
+         stage above, the image cannot move while a point is being placed. */
+      .lm-lengths {
+        font-size: 0.72rem; color: #9ca3af; padding: 0 16px 8px;
+        line-height: 1.35; min-height: calc(2 * 1.35em + 8px);
+      }
       .lm-lengths.caution { color: #facc15; }
       .lm-note { font-size: 0.68rem; color: #6b7280; padding: 0 16px 8px; line-height: 1.4; }
       .lm-actions { display: flex; gap: 8px; padding: 10px 16px 14px; }
