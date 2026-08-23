@@ -247,6 +247,16 @@ export class MeasureView {
           line-height: 1.35;
           text-align: center;
           pointer-events: none;
+          transition: bottom 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* The open drawer is taller than 96px and paints over this caution —
+           and that is the state in which it matters most, since the drawer is
+           open exactly while the camera is being aimed. _openDrawer() measures
+           the drawer and lifts the caution clear of it. Same transition as the
+           drawer, so the two move together rather than the caution jumping. */
+        .camera-stack.drawer-open .plane-warning {
+          bottom: var(--plane-warning-bottom, 96px);
         }
 
         .camera-overlay {
@@ -689,6 +699,7 @@ export class MeasureView {
     this._gaugeFill      = document.getElementById('gauge-fill')
     this._gaugeLabel     = document.getElementById('gauge-label')
 
+    this._cameraStack    = this._overlayCanvas.closest('.camera-stack')
     this._selectorDrawer = document.getElementById('selector-drawer')
     this._handleLabel    = document.getElementById('handle-label')
     this._segJoint       = document.getElementById('seg-joint')
@@ -724,7 +735,7 @@ export class MeasureView {
 
     document.getElementById('selector-handle').addEventListener('click', () => this._toggleDrawer())
 
-    this._overlayCanvas.closest('.camera-stack').addEventListener('click', (e) => {
+    this._cameraStack.addEventListener('click', (e) => {
       if (this._drawerOpen && !e.target.closest('#selector-drawer')) {
         this._closeDrawer()
       }
@@ -1379,11 +1390,27 @@ export class MeasureView {
   _openDrawer() {
     this._drawerOpen = true
     this._selectorDrawer.classList.add('open')
+    this._syncPlaneWarningOffset()
+    this._cameraStack.classList.add('drawer-open')
+  }
+
+  /**
+   * Hand the drawer's measured height to CSS so the off-axis caution rides
+   * above it rather than behind it. Measured, not hardcoded: the height comes
+   * from rendered button rows and the platform's text size, so a constant would
+   * be right on one device and wrong on the next. offsetHeight reads the same
+   * open or closed — the drawer only translates.
+   */
+  _syncPlaneWarningOffset() {
+    this._cameraStack.style.setProperty(
+      '--plane-warning-bottom', `${this._selectorDrawer.offsetHeight + 12}px`
+    )
   }
 
   _closeDrawer() {
     this._drawerOpen = false
     this._selectorDrawer.classList.remove('open')
+    this._cameraStack.classList.remove('drawer-open')
   }
 
   // ─── Joint / side / position selection ───────────────────────────────
@@ -1434,6 +1461,9 @@ export class MeasureView {
         return `<button class="seg-btn${active}" data-position="${p}">${POSITION_NAMES[p]}</button>`
       })
       .join('')
+    // Re-measure: swapping the row can change the drawer's height, and a stale
+    // offset would drop the caution back behind it.
+    if (this._drawerOpen) this._syncPlaneWarningOffset()
   }
 
   _updateSelectionLabel() {
