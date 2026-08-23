@@ -52,10 +52,15 @@ with Playwright can't decode JPEG, and this way there's no Python/PIL dependency
 - Both extreme snapshots land in IndexedDB as JPEG blobs.
 - An un-zeroed session records `calibrated: false` — explicitly false, not
   absent, because absence means "never recorded", a different claim.
-- The landmark evidence is present and well-formed: `landmarkSpace: 'video1'`,
+- The landmark evidence is present and well-formed: `landmarkSpace: 'frame1'`,
   the model stamps, both landmark sets stored as **normalized fractions in
   0..1** with a `kind` per point (a value outside that range means a display
   transform leaked into the stored record), and the unfiltered per-frame angles.
+- **The stored frame is the crop the clinician saw**, not the whole video
+  buffer: each snapshot's aspect ratio must match the camera stack's, not the
+  stream's. Only an end-to-end run can check this — the crop comes from the live
+  layout, which no unit test has. A frame matching the *stream's* aspect fails:
+  it means the `object-fit: cover` crop never reached the snapshot.
 - The session appears in History and SessionDetail renders.
 - No console errors.
 

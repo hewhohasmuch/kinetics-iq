@@ -210,9 +210,9 @@ async function main() {
     // The frames are now stored CLEAN and the overlay is drawn at view time,
     // so the session has to carry the coordinates to draw. Absence here would
     // not fail loudly — it would silently produce un-annotated pictures.
-    if (s.landmarkSpace === 'video1')
-      pass("landmarkSpace: video1 — frames stored clean, overlay drawn at view time")
-    else fail(`landmarkSpace is ${JSON.stringify(s.landmarkSpace)}, expected 'video1'`)
+    if (s.landmarkSpace === 'frame1')
+      pass("landmarkSpace: frame1 — frames stored clean and cropped to what was on screen")
+    else fail(`landmarkSpace is ${JSON.stringify(s.landmarkSpace)}, expected 'frame1'`)
 
     if (s.modelId && s.modelVersion)
       pass(`model stamped (${s.modelId} ${s.modelVersion})`)
@@ -224,8 +224,10 @@ async function main() {
         (r) => set[r] && Number.isFinite(set[r].x) && Number.isFinite(set[r].y)
       )
       if (!ok) { fail(`${which} landmark set missing or incomplete`); continue }
-      // Normalized fractions of the frame buffer — never pixels. A value
-      // outside 0..1 means a display transform leaked into the stored record.
+      // Normalized fractions of the STORED FRAME — never pixels. The frame is
+      // the visible crop, so the fractions are taken against that crop; a value
+      // outside 0..1 means either a display transform leaked in or the crop was
+      // taken without widening it to hold the evidence.
       const inRange = ['proximal', 'joint', 'distal'].every(
         (r) => set[r].x >= 0 && set[r].x <= 1 && set[r].y >= 0 && set[r].y <= 1
       )
@@ -263,6 +265,50 @@ async function main() {
         pass(`${which} snapshot blob in IndexedDB (${Math.round(img.bytes / 1024)}KB)`)
       else fail(`${which} snapshot blob missing from IndexedDB`)
     }
+
+    // WHAT YOU RECORDED IS WHAT YOU GET. The video is object-fit: cover, so the
+    // camera stack showed a crop of the stream; the stored frame must be that
+    // crop, not the whole buffer. Only an end-to-end run can check this — the
+    // crop comes from the live layout, which no unit test has.
+    const shapes = await page.evaluate(async (sid) => {
+      const db = await new Promise((res, rej) => {
+        const r = indexedDB.open('kinetics_images', 1)
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error)
+      })
+      const all = await new Promise((res, rej) => {
+        const req = db.transaction('images', 'readonly').objectStore('images').getAll()
+        req.onsuccess = () => res(req.result || []); req.onerror = () => rej(req.error)
+      })
+      const out = []
+      for (const rec of all.filter(r => r.sessionId === sid)) {
+        const bmp = await createImageBitmap(rec.blob)
+        out.push({ which: rec.which, w: bmp.width, h: bmp.height })
+        bmp.close?.()
+      }
+      const stack = document.querySelector('.camera-stack')?.getBoundingClientRect()
+      const video = document.getElementById('rom-video')
+      return {
+        frames:  out,
+        display: stack ? stack.width / stack.height : null,
+        stream:  video?.videoWidth ? video.videoWidth / video.videoHeight : null,
+      }
+    }, s.id)
+
+    if (shapes.display && shapes.stream && shapes.frames.length) {
+      for (const f of shapes.frames) {
+        const aspect = f.w / f.h
+        // Within 5%: the crop is snapped to whole pixels and may have been
+        // widened to keep an outlying landmark inside its own image.
+        if (Math.abs(aspect - shapes.display) / shapes.display < 0.05)
+          pass(`${f.which} frame is the on-screen crop (${f.w}×${f.h}, aspect ${aspect.toFixed(2)})`)
+        else if (Math.abs(aspect - shapes.stream) / shapes.stream < 0.02)
+          fail(`${f.which} frame is the whole video buffer (${f.w}×${f.h}) — the crop did not reach the snapshot`)
+        else
+          info(`${f.which} frame aspect ${aspect.toFixed(2)} — between the display ` +
+               `(${shapes.display.toFixed(2)}) and the stream (${shapes.stream.toFixed(2)}); ` +
+               'expected only when a landmark sat outside the visible area')
+      }
+    } else info('frame shapes unavailable — skipped the crop check')
 
     console.log('\n5. History and detail')
     await page.click('#btn-history')

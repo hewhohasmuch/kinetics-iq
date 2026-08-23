@@ -34,10 +34,16 @@
  * This guarantees dots land exactly on the physical markers regardless of
  * phone orientation, video resolution, or screen size.
  *
- * NOTE that none of that transform reaches the STORED frame: snapshots keep the
- * raw frame buffer and normalized landmarks, so the crop, the dpr and these
- * offsets are all live-display concerns. See core/landmarks.js.
+ * WHAT REACHES THE STORED FRAME, AND WHAT DOES NOT. The devicePixelRatio and
+ * the display offsets are live-display concerns and stay here — a snapshot
+ * keeps raw frame-buffer pixels and normalized landmarks. The CROP is the one
+ * part that does travel: a snapshot stores only the region this transform
+ * leaves visible, because that is the picture the clinician framed and judged
+ * (see core/frameCrop.js). Both sides therefore read the crop from
+ * `coverTransform()` rather than each deriving their own.
  */
+
+import { coverTransform } from '../core/frameCrop.js'
 
 export const MARKER_COLORS = {
   proximal: '#60a5fa',
@@ -232,6 +238,8 @@ export class Overlay {
     this._offsetY  = 0
     this._videoW   = 0
     this._videoH   = 0
+    // Sub-rect of the video the display shows; null until resize() runs.
+    this._visible  = null
   }
 
   attach(canvasElement) {
@@ -252,12 +260,25 @@ export class Overlay {
 
     this._videoW = videoW
     this._videoH = videoH
+    // Dropped up front, not on the way out: every path below that gives up —
+    // an unmeasurable layout, a stream that has changed size — must leave the
+    // crop UNKNOWN rather than let a stale rect describe a different picture.
+    // A capture then stores the whole frame, which is merely wider.
+    this._visible = null
 
     // Get the CSS display size of the canvas element
     const displayW = this.canvas.clientWidth
     const displayH = this.canvas.clientHeight
 
     if (displayW === 0 || displayH === 0) return
+
+    // The cover maths lives in core/frameCrop.js because the CAPTURE needs the
+    // same answer: the stored snapshot is cropped to the region this transform
+    // leaves visible. Two implementations of it would let the drawn picture and
+    // the stored one drift apart, which is the failure this file exists to
+    // prevent.
+    const cover = coverTransform(videoW, videoH, displayW, displayH)
+    if (!cover) return
 
     // Match canvas intrinsic size to display size × device pixel ratio
     // This prevents blurry drawing on high-DPI (Retina) screens
@@ -268,16 +289,32 @@ export class Overlay {
     // Scale the context so we can draw in CSS pixels (not device pixels)
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-    // object-fit: cover scale factor:
-    // Pick the scale that makes the video FILL the display (not fit inside it)
-    const scaleX = displayW / videoW
-    const scaleY = displayH / videoH
-    this._scale  = Math.max(scaleX, scaleY)
+    // Scale that makes the video FILL the display (not fit inside it), and the
+    // offsets that centre it — negative on the cropped axis, which is correct.
+    this._scale   = cover.scale
+    this._offsetX = cover.offsetX
+    this._offsetY = cover.offsetY
+    // The sub-rect of the VIDEO that survives the crop, in video pixels. This
+    // is what the clinician can actually see, so it is what a snapshot stores.
+    this._visible = cover.visible
+  }
 
-    // Offset: how much the scaled video is shifted to center it
-    // (will be negative on the cropped axis — that's correct)
-    this._offsetX = (displayW - videoW * this._scale) / 2
-    this._offsetY = (displayH - videoH * this._scale) / 2
+  /**
+   * The region of the video the display is currently showing, in video pixel
+   * space — i.e. what the clinician is looking at.
+   *
+   * Returns null until resize() has run against these exact video dimensions,
+   * and the caller must treat that as "crop unknown" (store the whole frame),
+   * never as "nothing visible".
+   *
+   * @param {number} [videoW] - assert the rect belongs to this stream size
+   * @param {number} [videoH]
+   * @returns {{x,y,width,height}|null}
+   */
+  visibleVideoRect(videoW, videoH) {
+    if (!this._visible) return null
+    if (videoW && videoH && (videoW !== this._videoW || videoH !== this._videoH)) return null
+    return this._visible
   }
 
   /**

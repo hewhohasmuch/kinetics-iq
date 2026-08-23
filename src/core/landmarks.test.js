@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   JOINT_CONFIG, ROLES, LANDMARK_SPACE,
-  landmarkKind, normalizeSet, denormalizeSet, isLandmarkSet,
+  landmarkKind, normalizeSet, normalizeSetInRect, denormalizeSet, isLandmarkSet,
 } from './landmarks.js'
 import { jointAngle } from './angle.js'
 
@@ -166,10 +166,76 @@ describe('isLandmarkSet', () => {
   })
 })
 
+describe('normalizeSetInRect — the stored frame is a CROP of the buffer', () => {
+
+  // The region the camera view was actually showing: portrait phone against a
+  // landscape stream, so a tall centre slice of it.
+  const rect = { x: 419, y: 0, width: 442, height: 720 }
+
+  it('takes fractions of the STORED region, not of the buffer it came from', () => {
+    const set = normalizeSetInRect(markers, rect, 'knee', 'right')
+    expect(set.joint.x).toBeCloseTo((640 - 419) / 442, 10)
+    expect(set.joint.y).toBeCloseTo(540 / 720, 10)
+  })
+
+  it('agrees with normalizeSet when the rect IS the whole buffer', () => {
+    expect(normalizeSetInRect(markers, { x: 0, y: 0, width: VW, height: VH }, 'knee', 'right'))
+      .toEqual(normalizeSet(markers, VW, VH, 'knee', 'right'))
+  })
+
+  it('does NOT clamp a point that fell outside the rect', () => {
+    // The proximal point here sits left of this crop, and the honest answer is
+    // a negative fraction. Clamping would move a landmark — silently inventing
+    // a placement the model never made — so keeping every point inside its own
+    // image is the CROP's job, not this function's: storedFrameRect() widens
+    // the rect until the evidence fits. See frameCrop.test.js.
+    const set = normalizeSetInRect(markers, rect, 'knee', 'right')
+    expect(set.proximal.x).toBeLessThan(0)
+  })
+
+  it('carries the same kind and visibility as the uncropped set', () => {
+    const cropped = normalizeSetInRect(markers, rect, 'ankle', 'left')
+    expect(cropped.proximal.kind).toBe('derived')     // shin direction, not a joint
+    expect(cropped.distal.visibility).toBe(0.8)
+  })
+
+  it('RECOMPUTES TO THE SAME ANGLE as the uncropped set', () => {
+    // The whole reason cropping is safe. Cropping translates the points and
+    // renormalizes against a different aspect; projecting back into a space of
+    // the CROP's own ratio makes that a translation plus a UNIFORM scale, which
+    // jointAngle() is invariant to. If this ever fails, every stored angle and
+    // every verification on a cropped frame is measuring a stretched space.
+    const truth = recomputeAngle(normalizeSet(markers, VW, VH, 'knee', 'right'),
+                                 { joint: 'knee', width: VW, height: VH })
+    const cropped = recomputeAngle(normalizeSetInRect(markers, rect, 'knee', 'right'),
+                                   { joint: 'knee', width: rect.width, height: rect.height })
+    expect(cropped).toBeCloseTo(truth, 5)
+  })
+
+  it('holds for a crop on the OTHER axis too', () => {
+    const wide = { x: 0, y: 96, width: 1280, height: 528 }
+    const truth = recomputeAngle(normalizeSet(markers, VW, VH, 'knee', 'right'),
+                                 { joint: 'knee', width: VW, height: VH })
+    const cropped = recomputeAngle(normalizeSetInRect(markers, wide, 'knee', 'right'),
+                                   { joint: 'knee', width: wide.width, height: wide.height })
+    expect(cropped).toBeCloseTo(truth, 5)
+  })
+
+  it('returns null for a degenerate rect rather than dividing by zero', () => {
+    expect(normalizeSetInRect(markers, { x: 0, y: 0, width: 0, height: 720 }, 'knee', 'right')).toBeNull()
+    expect(normalizeSetInRect(markers, null, 'knee', 'right')).toBeNull()
+  })
+})
+
 describe('LANDMARK_SPACE', () => {
 
   it('is the stamp the migration and the renderer both branch on', () => {
-    expect(LANDMARK_SPACE).toBe('video1')
+    // Bumped from 'video1' when snapshots stopped storing the whole video
+    // buffer and started storing the visible crop: the stamp describes HOW THE
+    // FRAME WAS STORED, so it moves when that changes. Nothing branches on
+    // which of the two it is — only on presence, which still means "clean frame
+    // plus landmarks" and absence still means the legacy baked composite.
+    expect(LANDMARK_SPACE).toBe('frame1')
   })
 })
 

@@ -53,17 +53,27 @@ export const ROLES = ['proximal', 'joint', 'distal']
 /**
  * The coordinate space stamp written alongside a stored landmark set.
  *
- * 'video1' = fractions of the RAW per-tick frame buffer (`center.x / videoW`),
- * not the displayed canvas. That deliberately excludes the object-fit: cover
- * crop, the devicePixelRatio and the overlay's scale/offset transform, none of
- * which are properties of the measurement — and it means no landmark can fall
- * outside the stored image. Fractions also survive the SNAPSHOT_MAX_EDGE
- * downscale and any future re-encode.
+ * 'frame1' = fractions of the STORED FRAME — the region of the per-tick video
+ * buffer that the snapshot actually contains, which is the crop the clinician
+ * was looking at while measuring (see core/frameCrop.js). Fractions of the
+ * stored image, never of the display: the devicePixelRatio and the overlay's
+ * scale/offset transform stay out, as they are properties of a phone screen
+ * rather than of the measurement, and no landmark can fall outside its own
+ * image. Fractions also survive the SNAPSHOT_MAX_EDGE downscale and any future
+ * re-encode.
+ *
+ * 'video1' = the same thing normalized against the WHOLE video buffer, from
+ * builds that stored the uncropped frame. Nothing has to branch on the
+ * difference — every consumer takes its pixel dimensions from the stored image
+ * itself, and cropping is a translation plus a uniform scale, which
+ * `jointAngle()` is invariant to — so a 'video1' session recomputes and
+ * re-renders exactly as it always did. The stamp is bumped because it describes
+ * HOW THE FRAME WAS STORED, and that changed.
  *
  * ABSENT on a session = recorded before landmark capture existed. That session
  * is not verifiable and its stored image is the legacy baked composite.
  */
-export const LANDMARK_SPACE = 'video1'
+export const LANDMARK_SPACE = 'frame1'
 
 /**
  * What kind of thing a landmark is — derived from JOINT_CONFIG, never stored
@@ -87,17 +97,23 @@ export function landmarkKind(joint, side, role) {
 }
 
 /**
- * Convert this tick's markers into the normalized set stored on a session.
+ * Convert this tick's markers into the normalized set stored on a session,
+ * relative to the REGION OF THE FRAME BUFFER THE SNAPSHOT KEEPS.
+ *
+ * The stored image is the visible crop, not the whole buffer, so the fractions
+ * must be taken against that crop or every point would be drawn — and dragged —
+ * somewhere else entirely. The angle is unaffected either way: cropping is a
+ * translation plus a uniform scale once the set is projected back into a space
+ * of the crop's own aspect, and `jointAngle()` is invariant to both.
  *
  * @param {object} markers - from PoseDetector.detect(), centres in video pixels
- * @param {number} videoW  - the frame buffer's width  (NOT the display canvas)
- * @param {number} videoH  - the frame buffer's height
+ * @param {{x,y,width,height}} rect - the stored region, in video pixels
  * @param {string} joint
  * @param {string} side
  * @returns {object|null} { proximal, joint, distal } or null if any role is missing
  */
-export function normalizeSet(markers, videoW, videoH, joint, side) {
-  if (!markers || !videoW || !videoH) return null
+export function normalizeSetInRect(markers, rect, joint, side) {
+  if (!markers || !rect || !rect.width || !rect.height) return null
 
   const set = {}
   for (const role of ROLES) {
@@ -106,13 +122,28 @@ export function normalizeSet(markers, videoW, videoH, joint, side) {
     // one would invite a consumer to assume the missing point was at the origin.
     if (!m || !m.center) return null
     set[role] = {
-      x:          m.center.x / videoW,
-      y:          m.center.y / videoH,
+      x:          (m.center.x - (rect.x || 0)) / rect.width,
+      y:          (m.center.y - (rect.y || 0)) / rect.height,
       visibility: m.visibility ?? 1,
       kind:       landmarkKind(joint, side, role),
     }
   }
   return set
+}
+
+/**
+ * `normalizeSetInRect` against the whole frame buffer — the uncropped case.
+ *
+ * @param {object} markers
+ * @param {number} videoW - the frame buffer's width  (NOT the display canvas)
+ * @param {number} videoH - the frame buffer's height
+ * @param {string} joint
+ * @param {string} side
+ * @returns {object|null}
+ */
+export function normalizeSet(markers, videoW, videoH, joint, side) {
+  if (!videoW || !videoH) return null
+  return normalizeSetInRect(markers, { x: 0, y: 0, width: videoW, height: videoH }, joint, side)
 }
 
 /**
