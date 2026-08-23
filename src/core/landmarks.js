@@ -21,6 +21,8 @@
 // proximal/joint/distal can be:
 //   - a number: single landmark index
 //   - { midpoint: [a, b] }: average of two landmarks (visibility = max of the two)
+import { jointAngle, toClinicalAngle } from './angle.js'
+
 export const JOINT_CONFIG = {
   knee: {
     left:  { proximal: 23, joint: 25, distal: 27 },
@@ -151,4 +153,152 @@ export function isLandmarkSet(set) {
   return ROLES.every(r =>
     set[r] && Number.isFinite(set[r].x) && Number.isFinite(set[r].y)
   )
+}
+
+// ─── Recomputing from a set (the verification path) ──────────────────────────
+
+/**
+ * The clinical angle a landmark set describes.
+ *
+ * THE ASPECT RATIO IS NOT OPTIONAL, and getting this wrong is silent.
+ * `jointAngle()` is invariant to UNIFORM scale, but a normalized set divides x
+ * by the width and y by the height — which is a NON-uniform scaling whenever
+ * the frame is not square. Computing an angle straight from the fractions
+ * therefore measures the angle in a stretched space and returns a plausible,
+ * wrong number: on a 16:9 frame a true 120° reads about 133°. So the set is
+ * always projected back into a real pixel space of the frame's own aspect ratio
+ * first. Any width/height with that ratio gives the same answer — that part IS
+ * scale-invariant — which is why the snapshot's own dimensions are fine even
+ * after the SNAPSHOT_MAX_EDGE downscale.
+ *
+ * Returns the CALIBRATED clinical angle when an offset is supplied, so a
+ * verification on a zeroed session is on the same scale as the session's own
+ * numbers. The offset is a plain subtraction, exactly as CalibrationManager
+ * applies it live.
+ *
+ * @param {object} set - normalized landmark set
+ * @param {object} opts
+ * @param {string} opts.joint
+ * @param {number} opts.width  - the frame's pixel width  (aspect ratio source)
+ * @param {number} opts.height - the frame's pixel height
+ * @param {number} [opts.calibrationOffset] - degrees to subtract; 0 when raw
+ * @returns {number|null} degrees, rounded to 1dp, or null if not computable
+ */
+export function recomputeAngle(set, { joint, width, height, calibrationOffset = 0 } = {}) {
+  const px = denormalizeSet(set, width, height)
+  if (!px) return null
+
+  const interior = jointAngle(px.proximal, px.joint, px.distal)
+  if (interior === null) return null
+
+  const clinical = toClinicalAngle(interior, joint)
+  if (clinical === null) return null
+
+  return Math.round((clinical - (calibrationOffset ?? 0)) * 10) / 10
+}
+
+/**
+ * The two segment lengths a set describes, in pixels of the given frame.
+ *
+ * ADVISORY ONLY — see the "bone length is a diagnostic, not a corrector" rule
+ * in CLAUDE.md. A large change while dragging suggests a point has been put
+ * somewhere anatomically implausible, but the lengths cannot be LOCKED: the
+ * proximal distance is acromion-to-elbow rather than a real bone, and it is a
+ * 2D projection already shortened by out-of-plane tilt, so constraining a drag
+ * to it would pin the point to a circle of the wrong radius about the wrong
+ * centre.
+ *
+ * @param {object} set
+ * @param {number} width
+ * @param {number} height
+ * @returns {{proximal: number, distal: number}|null}
+ */
+export function segmentLengths(set, width, height) {
+  const px = denormalizeSet(set, width, height)
+  if (!px) return null
+  const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
+  return {
+    proximal: d(px.proximal, px.joint),
+    distal:   d(px.joint, px.distal),
+  }
+}
+
+/**
+ * How far each point moved between the model's set and a clinician's.
+ *
+ * DERIVED, NEVER STORED. Which landmark moved is exactly recoverable by
+ * comparing the two sets, and storing it separately would create a second
+ * source of truth that can disagree with the coordinates it summarises.
+ *
+ * Distances are in NORMALIZED units against the frame's own axes, so `moved`
+ * answers "did this point change" without needing the image; use
+ * `segmentLengths` when a pixel distance is what matters.
+ *
+ * @param {object} raw
+ * @param {object} verified
+ * @returns {object|null} { proximal: {dx,dy,distance}, joint: …, distal: …, moved: string[] }
+ */
+export function landmarkDelta(raw, verified) {
+  if (!isLandmarkSet(raw) || !isLandmarkSet(verified)) return null
+  const out = { moved: [] }
+  for (const role of ROLES) {
+    const dx = verified[role].x - raw[role].x
+    const dy = verified[role].y - raw[role].y
+    const distance = Math.hypot(dx, dy)
+    out[role] = { dx, dy, distance }
+    // A point the clinician looked at and left alone is not "moved"; exact
+    // equality is the right test because an untouched point is copied, not
+    // recomputed.
+    if (dx !== 0 || dy !== 0) out.moved.push(role)
+  }
+  return out
+}
+
+/**
+ * Build a verification record. THE ONLY constructor for one.
+ *
+ * The editor never assembles this shape piecemeal: a half-built record —
+ * landmarks without an angle, or angles without attribution — is what the
+ * single-column storage design exists to make unrepresentable, and that
+ * guarantee is worth nothing if a caller can hand-roll the object.
+ *
+ * ATTRIBUTION IS NOT QUALIFICATION. `by`/`byMode`/`byDevice` record who and in
+ * what mode; this application has no role model and cannot establish that
+ * anyone was qualified to measure. Nothing built from this may be described as
+ * "validated", "corrected" or "accurate".
+ *
+ * @param {object} opts
+ * @param {object} opts.landmarks - { peak: Set|null, min: Set|null }
+ * @param {object} opts.angles    - { max: number|null, min: number|null }
+ * @param {string|null} opts.by
+ * @param {'account'|'device'} opts.byMode
+ * @param {string} opts.byDevice
+ * @param {string|null} [opts.modelId]
+ * @param {string|null} [opts.modelVersion]
+ * @param {string} opts.id  - caller supplies, so the id is generated once
+ * @param {number} [opts.at]
+ * @returns {object}
+ */
+export function buildVerification({
+  id, at, landmarks, angles, by, byMode, byDevice, modelId, modelVersion,
+}) {
+  return {
+    id,
+    at: at ?? Date.now(),
+    by: by ?? null,
+    // Explicit, never inferred from `by` being null.
+    byMode: byMode ?? (by ? 'account' : 'device'),
+    byDevice: byDevice ?? null,
+    landmarks: {
+      peak: landmarks?.peak ?? null,
+      min:  landmarks?.min  ?? null,
+    },
+    // null for an end that was not verified — NOT 0, which would be a reading.
+    angles: {
+      max: Number.isFinite(angles?.max) ? angles.max : null,
+      min: Number.isFinite(angles?.min) ? angles.min : null,
+    },
+    modelId:      modelId ?? null,
+    modelVersion: modelVersion ?? null,
+  }
 }

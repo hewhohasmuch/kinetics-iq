@@ -201,3 +201,98 @@ describe('extensionFloorCaveat', () => {
   })
 
 })
+
+// ─── Verification (PR 3) ─────────────────────────────────────────────────────
+
+import { verificationSummary } from './provenance.js'
+
+const verified = (angles, over = {}) => ({
+  ...current, joint: 'knee', calibrated: false,
+  min: 9, max: 121.8, rom: 112.8,
+  verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles, ...over }],
+})
+
+describe('verificationSummary', () => {
+
+  it('reports a model-measured session as the default, with no attribution', () => {
+    const v = verificationSummary({ ...current, min: 9, max: 121.8 })
+    expect(v.level).toBe('model')
+    expect(v.ends).toEqual([])
+    expect(v.attribution).toBeNull()
+  })
+
+  it('names both ends when both were verified', () => {
+    const v = verificationSummary(verified({ min: 2.1, max: 127.3 }))
+    expect(v.level).toBe('clinician')
+    expect(v.ends).toEqual(['peak', 'minimum'])
+    expect(v.label).toBe('Clinician-verified endpoints')
+  })
+
+  it('names only the end that was actually verified', () => {
+    const v = verificationSummary(verified({ min: null, max: 127.3 }))
+    expect(v.ends).toEqual(['peak'])
+    expect(v.label).toMatch(/peak/)
+  })
+
+  it('says the rest of the recording is unchanged', () => {
+    // The scope IS the claim: these are endpoint observations, not the
+    // extremes of the whole motion.
+    expect(verificationSummary(verified({ min: 2.1, max: 127.3 })).detail)
+      .toMatch(/rest of the recording is unchanged/)
+  })
+
+  it('distinguishes an account from a device, and names no person', () => {
+    const acct = verificationSummary(verified({ min: 2, max: 120 }, { byMode: 'account', by: 'user-1' }))
+    const dev  = verificationSummary(verified({ min: 2, max: 120 }, { byMode: 'device', by: null }))
+    expect(acct.attribution).toMatch(/signed in/)
+    expect(dev.attribution).toMatch(/no account/)
+    expect(dev.attribution).not.toMatch(/user-1/)
+    expect(acct.attribution).not.toMatch(/user-1/)
+  })
+
+  it('NEVER strengthens the claim past "verified"', () => {
+    // This app has no role model: an account proves signup, not a licence, and
+    // the software does not confirm the placed points are anatomically right.
+    for (const s of [verified({ min: 2, max: 120 }), { ...current, min: 9, max: 120 }]) {
+      const v = verificationSummary(s)
+      const text = `${v.label} ${v.detail} ${v.attribution ?? ''}`.toLowerCase()
+      expect(text).not.toMatch(/validated|corrected|accurate/)
+    }
+  })
+})
+
+describe('extensionFloorCaveat once an endpoint is verified', () => {
+
+  it('DROPS the floor caveat when the verified minimum clears the bound', () => {
+    // The lag is now a finding a clinician stands behind.
+    expect(extensionFloorCaveat(verified({ min: 6.5, max: 121.8 }))).toBeNull()
+  })
+
+  it('still fires — with a DIFFERENT claim — when the minimum sits at the bound', () => {
+    // acos is bounded at 0 for this joint no matter where the points go, so a
+    // minimum resting there cannot separate neutral from hyperextension.
+    const c = extensionFloorCaveat(verified({ min: 0, max: 121.8 }))
+    expect(c.label).toBe('Cannot show hyperextension')
+    expect(c.tail).toMatch(/cannot be measured below 0/)
+    expect(c.reason).toMatch(/inverse cosine|bounded/)
+  })
+
+  it('does not credit verification of the PEAK for the minimum', () => {
+    // Only the end that was verified changes the claim.
+    const c = extensionFloorCaveat(verified({ min: null, max: 127.3 }))
+    expect(c.label).toBe('Minimum may be measurement floor')
+  })
+
+  it('leaves unverified sessions exactly as they were', () => {
+    const raw = { ...current, joint: 'knee', calibrated: false, min: 9, max: 121.8 }
+    expect(extensionFloorCaveat(raw).label).toBe('Minimum may be measurement floor')
+    expect(extensionFloorCaveat({ ...raw, calibrated: true })).toBeNull()
+    expect(extensionFloorCaveat({ ...raw, calibrated: undefined })).toBeNull()
+  })
+
+  it('never claims a floor for a joint whose range is two-sided', () => {
+    expect(extensionFloorCaveat(verified({ min: 0, max: 30 }, {}))).not.toBeNull()
+    const ankle = { ...verified({ min: 0, max: 30 }), joint: 'ankle' }
+    expect(extensionFloorCaveat(ankle)).toBeNull()
+  })
+})

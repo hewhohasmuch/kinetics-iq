@@ -34,7 +34,7 @@ import {
   jointLabel, positionLabel, romArc, motionLabel,
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
-import { sessionProvenance, extensionFloorCaveat } from '../core/provenance.js'
+import { sessionProvenance, extensionFloorCaveat, verificationSummary } from '../core/provenance.js'
 import { reportedExtremes } from '../core/extremes.js'
 import { exportSessionsAsPdf } from './exportPdf.js'
 import { Chart } from 'chart.js/auto'
@@ -250,9 +250,31 @@ export class HistoryView {
 
     // Legacy sessions are marked, not dropped. Excluding them would quietly
     // change the shape of a trend the clinician is reading as the patient's.
-    const flags       = chartData.map(s => sessionProvenance(s).level !== 'ok')
-    const pointColor  = (ok) => flags.map(bad => bad ? '#fbbf24' : ok)
-    const pointStyle  = flags.map(bad => bad ? 'triangle' : 'circle')
+    //
+    // THREE classes now, and the reader must tell them apart at a glance:
+    // legacy/unknown, model-measured, and clinician-verified. Shape carries it
+    // because colour is already spent on the two series and on the amber that
+    // means "suspect" — a verified point is an upgrade and must not borrow it.
+    const provClass = chartData.map(s => {
+      if (sessionProvenance(s).level !== 'ok') return 'legacy'
+      return reportedExtremes(s).endpointsOnly ? 'clinician' : 'model'
+    })
+    const SHAPE = { legacy: 'triangle', clinician: 'rectRot', model: 'circle' }
+    const pointStyle = provClass.map(c => SHAPE[c])
+    const pointColor = (ok) => provClass.map(c =>
+      c === 'legacy' ? '#fbbf24' : c === 'clinician' ? '#ffffff' : ok)
+
+    // The line must not assert that certainty is continuous across a change of
+    // provenance. It already spanned legacy boundaries before this — verified
+    // points sharpen an existing defect rather than introducing one. Dashing is
+    // unavailable (the Minimum series is dashed already), so the segment fades
+    // instead, which reads on both series.
+    const segment = {
+      borderColor: (c) =>
+        provClass[c.p0DataIndex] !== provClass[c.p1DataIndex]
+          ? 'rgba(148,163,184,0.45)'
+          : undefined,
+    }
 
     if (this._chart) this._chart.destroy()
 
@@ -272,6 +294,7 @@ export class HistoryView {
             pointRadius: 4,
             pointHoverRadius: 6,
             tension: 0.3,
+            segment,
             fill: '+1',            // shade the arc between the two lines
           },
           {
@@ -285,6 +308,7 @@ export class HistoryView {
             pointRadius: 4,
             pointHoverRadius: 6,
             tension: 0.3,
+            segment,
             fill: false,
           },
         ]
@@ -308,6 +332,11 @@ export class HistoryView {
                 const lines = [`Total range ${s.rom}°`]
                 const pos = positionLabel(s.position)
                 if (pos) lines.push(pos)
+                // Stated for EVERY point, not only the marked ones: a reader
+                // comparing two points needs to know what each one is, and
+                // silence on the majority would leave the shapes to carry a
+                // claim on their own.
+                lines.push(verificationSummary(s).label)
                 const p = sessionProvenance(s)
                 if (p.level !== 'ok') lines.push(`⚠ ${p.label}`)
                 return lines
@@ -400,6 +429,13 @@ export class HistoryView {
     // question, so the qualification belongs next to it. Unlike the badge
     // above this says nothing about which build recorded the session — it is
     // read off the measurement itself.
+    // Neutral, and only when something was verified. This is an upgrade, so it
+    // must not be styled like the amber caveats beside it.
+    const ver        = verificationSummary(session)
+    const verBadge   = ver.level === 'clinician'
+      ? `<span class="verified-badge" title="${ver.detail}">✓ ${ver.label}</span>`
+      : ''
+
     const floor      = extensionFloorCaveat(session)
     const floorBadge = floor
       ? `<span class="legacy-badge" title="${floor.reason}">⚠ ${floor.label}</span>`
@@ -416,7 +452,7 @@ export class HistoryView {
         <div class="row-check">${selected ? '✓' : ''}</div>
         <div class="session-info">
           <div class="session-date">${date} <span class="session-time">${time}</span></div>
-          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${positionBadge}${legacyBadge}${floorBadge}</div>
+          <div class="session-meta">${duration} · ${session.samples} samples · ${joint}${positionBadge}${verBadge}${legacyBadge}${floorBadge}</div>
           ${session.notes ? `<div class="session-notes">${session.notes}</div>` : ''}
         </div>
         <div class="session-stats">
@@ -703,6 +739,18 @@ export class HistoryView {
 
         /* Amber, not red: the session is readable, its numbers just are not
            comparable with a current recording. */
+        /* Green, not amber: verification is an upgrade, and the amber above
+           is what a reader has learned to scan for as "suspect". */
+        .verified-badge {
+          display: inline-block;
+          background: rgba(74,222,128,0.14);
+          color: #4ade80;
+          border-radius: 4px;
+          padding: 0 4px;
+          margin-left: 5px;
+          font-size: 11px;
+          font-weight: 500;
+        }
         .legacy-badge {
           display: inline-block;
           background: rgba(251,191,36,0.15);

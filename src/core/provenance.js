@@ -43,7 +43,14 @@
  */
 
 import { rawCannotGoBelowNeutral, motionTerms } from './angle.js'
-import { reportedExtremes } from './extremes.js'
+import { reportedExtremes, currentVerification } from './extremes.js'
+
+/**
+ * How close to the 0° bound a VERIFIED minimum must sit before it is reported
+ * as unable to show hyperextension. Deliberately small: above this, a clinician
+ * has placed the points and the reading is a finding they stand behind.
+ */
+const HYPEREXTENSION_BLIND_BELOW = 1
 
 /**
  * @typedef {object} Provenance
@@ -130,6 +137,68 @@ export function calibrationSummary(session) {
 }
 
 /**
+ * Whether a clinician placed the landmarks on this session's extreme frames.
+ *
+ * SIBLING OF calibrationSummary(), NOT OF sessionProvenance(). Verification is
+ * an UPGRADE, not a defect, so it does not belong among verdicts whose levels
+ * are all bad and mutually exclusive, and it is not a warning. Like the
+ * calibration line, it states which kind of measurement this is.
+ *
+ * THE WORDING IS CONSTRAINED, and the constraint is not stylistic. This
+ * application has no role model — an account proves signup, not a licence —
+ * and the software does not independently confirm that the points a clinician
+ * placed are anatomically right. So the claim tops out at "clinician-verified
+ * observation" and may never be strengthened to "validated", "corrected" or
+ * "accurate". A test pins that.
+ *
+ * IT IS ALSO SCOPED TO TWO FRAMES. Only the stored extremes have snapshots, so
+ * only they can be verified; the rest of the recording is untouched, and a
+ * verified maximum is an observation at an endpoint rather than "the largest
+ * angle reached". `detail` carries that scope wherever it is shown.
+ *
+ * @param {object} session
+ * @returns {{level: 'clinician'|'model', label: string, detail: string,
+ *            ends: string[], attribution: string|null}}
+ */
+export function verificationSummary(session) {
+  const { minSource, maxSource } = reportedExtremes(session)
+  const ends = []
+  if (maxSource === 'clinician') ends.push('peak')
+  if (minSource === 'clinician') ends.push('minimum')
+
+  if (ends.length === 0) {
+    return {
+      level: 'model',
+      label: 'Model-measured',
+      detail: 'Landmarks placed by the pose model; not reviewed by a clinician.',
+      ends: [],
+      attribution: null,
+    }
+  }
+
+  const v = currentVerification(session)
+  const which = ends.length === 2 ? 'Both endpoints were' : `The ${ends[0]} was`
+
+  return {
+    level: 'clinician',
+    label: ends.length === 2
+      ? 'Clinician-verified endpoints'
+      : `Clinician-verified ${ends[0]}`,
+    // Says what was done and, just as importantly, what was not.
+    detail: `${which} re-placed by hand on the stored frame. The rest of the ` +
+            `recording is unchanged, so these are endpoint observations rather ` +
+            `than the extremes of the whole motion.`,
+    ends,
+    // Identity, never qualification — and never a person's name, which this
+    // app does not hold. A device-mode record must not read as an identified
+    // clinician.
+    attribution: v?.byMode === 'account'
+      ? 'Verified while signed in'
+      : 'Verified on this device (no account)',
+  }
+}
+
+/**
  * Flag a minimum that cannot be distinguished from the measurement floor.
  *
  * WHY THIS IS DIFFERENT FROM THE TWO ABOVE:
@@ -160,16 +229,46 @@ export function calibrationSummary(session) {
  */
 export function extensionFloorCaveat(session) {
   if (!session) return null
-  if (session.calibrated !== false) return null
   if (!rawCannotGoBelowNeutral(session.joint)) return null
 
   // The REPORTED minimum, not the raw one: this caveat is about the number the
-  // clinician is actually shown. For an unverified session the two are the same
-  // value, so this changes nothing today.
-  const { reportedMin } = reportedExtremes(session)
-  if (!(reportedMin > 0)) return null
-
+  // clinician is actually shown.
+  const { reportedMin, minSource } = reportedExtremes(session)
   const negative = motionTerms(session.joint).negative
+
+  // VERIFICATION CHANGES THE CLAIM; IT DOES NOT SWITCH THE CAVEAT OFF.
+  //
+  // jointAngle() is an acos bounded to [0,180], so where this joint's neutral
+  // sits at an end of that interval the clinical angle can never go negative —
+  // and THAT BOUND SURVIVES VERIFICATION, because a dragged point still goes
+  // through the same acos. What verification removes is the reason the floor
+  // was dangerous: the rectified landmark noise that made a visibly flat knee
+  // read 9 degrees. So a verified minimum above the bound is a finding a
+  // clinician stands behind, while one sitting AT the bound still cannot
+  // distinguish "neutral" from "hyperextended".
+  //
+  // Verification must not launder an unknowable into a finding.
+  if (minSource === 'clinician') {
+    if (reportedMin > HYPEREXTENSION_BLIND_BELOW) return null
+    return {
+      label: 'Cannot show hyperextension',
+      tail:  `the landmarks were placed by a clinician, but this joint's angle ` +
+             `cannot be measured below 0°, so a ${negative} range past neutral ` +
+             `would read as 0 and is not represented here.`,
+      reason: `The angle comes from an inverse cosine, which is bounded at 0° ` +
+              `for this joint no matter where the landmarks are placed. ` +
+              `Verifying them removes the landmark noise that inflates a ` +
+              `minimum, but not the bound itself. A minimum resting at the ` +
+              `bound is consistent with neutral AND with hyperextension, and ` +
+              `this measurement cannot separate them.`,
+    }
+  }
+
+  // Unverified: fires only on the POSITIVE claim that the session was measured
+  // raw. Absence stays "Calibration not recorded", which carries its own
+  // uncertainty — asserting this mechanism there would manufacture a claim.
+  if (session.calibrated !== false) return null
+  if (!(reportedMin > 0)) return null
 
   return {
     label:  'Minimum may be measurement floor',

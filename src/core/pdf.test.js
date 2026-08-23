@@ -383,3 +383,73 @@ describe('buildSessionPdf — every drawn string is WinAnsi-safe', () => {
     }
   })
 })
+
+// ─── The verification band (PR 3) ────────────────────────────────────────────
+
+describe('buildSessionPdf — verification is stated, never as a warning', () => {
+
+  const verifiedSession = (angles = { min: 2, max: 130 }) => makeSession({
+    verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles }],
+  })
+
+  it('draws the verification band for a verified session', async () => {
+    await buildSessionPdf([verifiedSession()])
+    expect(allText()).toMatch(/CLINICIAN-VERIFIED/)
+  })
+
+  it('draws NO band for a model-measured session', async () => {
+    // The default needs no announcement; a band on every page would train the
+    // reader to ignore bands.
+    await buildSessionPdf([makeSession()])
+    expect(allText()).not.toMatch(/CLINICIAN-VERIFIED/)
+  })
+
+  it('paints it in the NEUTRAL colour, never the warning amber', async () => {
+    // Amber is what a reader has learned to read as "something is wrong".
+    await buildSessionPdf([verifiedSession()])
+    const fills = docStub.setFillColor.mock.calls.map(c => c.join(','))
+    expect(fills).toContain('237,242,247')      // noteBg
+    expect(fills).not.toContain('254,243,199')  // warnBg
+  })
+
+  it('carries the endpoint-only scope onto the page', async () => {
+    await buildSessionPdf([verifiedSession()])
+    expect(allText()).toMatch(/rest of the recording is unchanged/)
+  })
+
+  it('attributes a ROM derived from verified endpoints', async () => {
+    await buildSessionPdf([verifiedSession({ min: 10, max: 100 })])
+    expect(allText()).toMatch(/between clinician-verified endpoints/)
+  })
+
+  it('names no person and no patient identifier', async () => {
+    await buildSessionPdf([verifiedSession()])
+    const text = allText()
+    expect(text).not.toMatch(/user-1|MRN|Poppins/i)
+  })
+
+  it('NEVER strengthens the claim on a document filed in a chart', async () => {
+    await buildSessionPdf([verifiedSession()])
+    expect(allText().toLowerCase()).not.toMatch(/validated|accurate/)
+  })
+
+  it('keeps every drawn string WinAnsi-safe', async () => {
+    // One un-encodable character flips the WHOLE string to UTF-16 and renders
+    // as garbage — so the new band's text is held to the same rule.
+    await buildSessionPdf([verifiedSession()])
+    for (const s of drawn.texts) expect(winAnsi(s)).toBe(s)
+  })
+
+  it('draws BOTH the neutral band and a caveat band when both apply', async () => {
+    // A verified peak with a minimum sitting at the bound: the session is
+    // verified AND still cannot show hyperextension.
+    await buildSessionPdf([makeSession({
+      calibrated: false, min: 0, max: 130,
+      verifications: [{ id: 'v1', byMode: 'device', landmarks: {}, angles: { min: 0, max: 130 } }],
+    })])
+    const fills = docStub.setFillColor.mock.calls.map(c => c.join(','))
+    expect(fills).toContain('237,242,247')      // verification
+    expect(fills).toContain('254,243,199')      // the caveat
+    expect(allText()).toMatch(/CANNOT SHOW HYPEREXTENSION/)
+  })
+})
