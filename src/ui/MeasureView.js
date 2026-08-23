@@ -1461,8 +1461,10 @@ export class MeasureView {
         return `<button class="seg-btn${active}" data-position="${p}">${POSITION_NAMES[p]}</button>`
       })
       .join('')
-    // Re-measure: swapping the row can change the drawer's height, and a stale
-    // offset would drop the caution back behind it.
+    // Re-measure: a rebuilt row can change the drawer's height — not between
+    // joints (two entries or three is one flex row either way) but if it wraps
+    // or the platform text scales — and a stale offset would drop the caution
+    // back behind the drawer.
     if (this._drawerOpen) this._syncPlaneWarningOffset()
   }
 

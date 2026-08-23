@@ -29,12 +29,39 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 - **`addInitScript` passes exactly ONE argument** to the page function. A second one arrives as `undefined`, and `localStorage.setItem(k, JSON.stringify(undefined))` stores the *string* `"undefined"`, which surfaces far away as `migrateInlineImages failed: SyntaxError: "undefined" is not valid JSON` on boot. Pass a single object.
 - To verify anything downstream of a recording (History, SessionDetail), **seed `rom_sessions` directly and skip the camera** — it turns a multi-minute run into a few seconds. Sessions need `id` (a real UUID; `sess_*` ids are treated as legacy and stay local-only), `patient_id`, `date` `'YYYY-MM-DD'`, `timestamp`, `min`/`max`/`rom`, `samples`, `duration_s`, `angleTimeline`, `updated_at`. Omit `angleConvention`/`angleFilter` to make one legacy, or set `calibrated`/`calibrationOffset` to exercise the provenance chips.
 - To exercise anything to do with the stored frames or **landmark verification**, the session also needs `landmarkSpace` (`'frame1'`, or `'video1'` for a session stored before frames were cropped — nothing branches on which) and `landmarksRaw: { peak, min }`, each set being `{proximal, joint, distal}` of `{x, y, visibility, kind}` with x/y as **normalized fractions**. Omit `landmarkSpace` to make a session legacy — its stored image is then treated as a baked composite and is never drawn over. Add `verifications: [record]` to start from an already-verified session. **Use a BENT set**: collinear points stay collinear under any affine transform, so they read 0° at every resolution and will make a scale- or aspect-related test pass vacuously.
-- Key ids: `#btn-start-camera`, `#angle-display` (readout, `--°` until pose found), `#btn-calibrate` (Set Zero, ~2s sampling), `#btn-record-start/stop`, `#btn-notes-skip`, `#btn-history`, `.session-row`, `#btn-signout`, `#btn-new-patient`, `#pf-name`, `.form-save`, login: `#login-email/password/submit`.
+- Key ids: `#btn-start-camera`, `#angle-display` (readout, `--°` until pose found), `#btn-calibrate` (Set Zero, ~2s sampling), `#btn-record-start/stop`, `#btn-notes-skip`, `#btn-history`, `.session-row`, `#btn-signout`, `#btn-new-patient`, `#pf-name`, `.form-save`, login: `#login-email/password/submit`. The selector drawer is `#selector-drawer` / `#selector-handle` with `.seg-btn[data-joint|data-side|data-position]` inside it, and the off-axis caution is `#plane-warning`.
 - `#btn-history` sits in the controls row, which is **hidden until the camera starts** — Playwright's `click()` waits for visibility and times out. When skipping the camera, wait for `state: 'attached'` and click it through `page.evaluate(() => document.getElementById('btn-history').click())`.
 - Model + first detection takes 30–90s headless; wait on `#angle-display` matching `/^-?\d+°$/` with a generous timeout. The `-?` is required — once Set Zero has been tapped, anything past the zero point in the extension direction renders negative.
 - `#btn-calibrate` sampling ends on its own after 20 detection frames, which headless (~2Hz) stretches to ~10–20s. Wait for its label to return to `Set Zero` rather than a fixed timeout, then read `#cal-status`.
 - SessionDetail's Chart.js has a 400ms entry animation — screenshot too early and the timeline line renders near zero; wait ~1s after the view mounts.
 - The overlay angle label is canvas-drawn; assert it by screenshotting and reading the image, not via DOM. Note it is drawn at *view time* from the saved record now, not burned in at capture — so a frame with no overlay means the landmark set never reached the session, not that the capture failed.
+
+## The off-axis caution and the drawer (`#plane-warning`)
+
+The caution sits at the bottom of the camera stack, where the selector drawer also lives, so
+it is a layout question — and layout is the part `src/ui/` has no unit tests for.
+
+- **Skip the camera.** `segmentTilt()` will not reliably clear 25° on a fake-camera pose, so
+  reveal both elements directly: the drawer is `display:none` until the camera starts, so set
+  `#selector-drawer`'s display back and `#plane-warning`'s to `block`. Then open the drawer by
+  clicking `#selector-handle` for real — the offset that lifts the caution above it is
+  computed in `_openDrawer()`, so an evaluate-only shortcut would skip the code under test.
+- **Wait out the 280ms transition** after any open, close or joint change (~450ms is enough).
+  Both elements animate, and a bounding box read sooner measures a position neither will
+  hold: a check made 120ms after a joint change reported 3.5px of clearance where the settled
+  answer is 12px. It passed the assertion, but the number was fiction.
+- **Forcing the drawer visible is not the same as starting the camera.** `_startCamera()`
+  also calls `_renderPositions()`, so the real drawer always carries a position row; a drive
+  that only sets `display` gets a drawer 24px shorter (111px against 135px at a 393px width)
+  and the row appears on the first joint tap. Read a height in that state and you have
+  measured your own harness. Selecting a joint does *not* change the height in the app — a
+  position row is one flex row at two entries or three — so the re-measure in
+  `_renderPositions()` is a guard against a wrapped row or larger platform text, and a drive
+  at one viewport will not exercise it.
+- Assert geometry, not appearance: compare `#plane-warning`'s `getBoundingClientRect().bottom`
+  against `#selector-drawer`'s `.top`, and check the closed state still rests 96px above the
+  stack floor. Screenshot as well — the geometry check passes on a caution clipped to one
+  illegible line, so also assert its height against its computed `line-height`.
 
 ## Landmark verification (the editor)
 
