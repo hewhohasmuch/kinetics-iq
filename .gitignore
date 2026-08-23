@@ -6,3 +6,14 @@ dist
 
 # Generated E2E fixtures — downloaded pose image, ~23MB y4m, screenshots
 scripts/e2e/.fixtures
+
+# Local scratch. tmp/ holds diagnostic scripts AND photographs of people used
+# to check the measurement by eye — the pose screenshots CLAUDE.md refers to
+# are deliberately never committed. Ignoring it means a stray `git add -A`
+# cannot put a patient's picture in the repository history, where removing it
+# means rewriting history rather than deleting a file.
+tmp/
+
+# Working state for the superpowers skills. The plans and specs worth keeping
+# are committed under docs/superpowers/; this is the scratch behind them.
+.superpowers/
