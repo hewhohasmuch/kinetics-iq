@@ -81,6 +81,28 @@ export async function signUp(email, password) {
   return data.session
 }
 
+/**
+ * Email a password-reset link. The link returns to this page, where
+ * supabase-js turns it into a recovery session (see authRedirect.js). The
+ * page URL must be on the project's Redirect URLs allowlist, or Supabase
+ * sends the link to the Site URL instead.
+ *
+ * Supabase answers success whether or not the account exists; an error here
+ * is a rate limit or delivery failure, and the caller must not imply an
+ * email was sent.
+ */
+export async function requestPasswordReset(email) {
+  const redirectTo = window.location.origin + window.location.pathname
+  const { error } = await getClient().auth.resetPasswordForEmail(email, { redirectTo })
+  if (error) throw error
+}
+
+/** Set a new password for the signed-in (recovery) session. */
+export async function updatePassword(password) {
+  const { error } = await getClient().auth.updateUser({ password })
+  if (error) throw error
+}
+
 export async function signOut() {
   const { error } = await getClient().auth.signOut()
   if (error) throw error
