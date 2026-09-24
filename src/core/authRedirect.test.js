@@ -13,6 +13,12 @@ import {
   beginRecovery,
   isRecoveryPending,
   endRecovery,
+  recoveryTokens,
+  recoveryAgeSeconds,
+  readRecoveryTokens,
+  isUnfinishedResetSession,
+  sessionIdOf,
+  formatRecoveryDiagnostics,
 } from './authRedirect.js'
 
 describe('parseAuthRedirect', () => {
@@ -98,5 +104,109 @@ describe('recovery guard', () => {
     expect(() => beginRecovery()).not.toThrow()
     expect(isRecoveryPending()).toBe(false)
     expect(() => endRecovery()).not.toThrow()
+  })
+
+  it('keeps the link tokens for the life of the recovery, then drops them', () => {
+    beginRecovery({ access_token: 'a', refresh_token: 'r' })
+    expect(recoveryTokens()).toEqual({ access_token: 'a', refresh_token: 'r' })
+    endRecovery()
+    expect(recoveryTokens()).toBeNull()
+  })
+
+  it('does not overwrite held tokens when the guard is re-armed without any', () => {
+    // PASSWORD_RECOVERY re-arms the guard after boot already stored tokens
+    beginRecovery({ access_token: 'a', refresh_token: 'r' })
+    beginRecovery()
+    expect(recoveryTokens()).toEqual({ access_token: 'a', refresh_token: 'r' })
+  })
+
+  it('reports how long the recovery has been in progress', () => {
+    const t0 = Date.now()
+    beginRecovery()
+    expect(recoveryAgeSeconds(t0 + 42_000)).toBe(42)
+    endRecovery()
+    expect(recoveryAgeSeconds()).toBeNull()
+  })
+})
+
+describe('readRecoveryTokens', () => {
+
+  it('returns the tokens from a recovery link', () => {
+    expect(readRecoveryTokens('#access_token=a.b.c&refresh_token=r1&type=recovery'))
+      .toEqual({ access_token: 'a.b.c', refresh_token: 'r1' })
+  })
+
+  it('returns null for anything that is not a complete recovery link', () => {
+    expect(readRecoveryTokens('#access_token=a&refresh_token=r&type=signup')).toBeNull()
+    expect(readRecoveryTokens('#type=recovery&access_token=a')).toBeNull()
+    expect(readRecoveryTokens('')).toBeNull()
+  })
+})
+
+// A session as supabase-js stores it, with a JWT carrying the given claims
+const jwt = (claims) => ['h', Buffer.from(JSON.stringify(claims)).toString('base64url'), 's'].join('.')
+const sessionWith = ({ amr, sessionId = 'sess-1', recoverySentAt }) => ({
+  access_token: jwt({ session_id: sessionId, amr }),
+  user: { recovery_sent_at: recoverySentAt },
+})
+const SENT = '2026-09-24T23:06:21Z'
+const SENT_S = Date.parse(SENT) / 1000
+
+describe('isUnfinishedResetSession', () => {
+
+  it('flags a session signed in from a reset email sent just before it', () => {
+    const s = sessionWith({ amr: [{ method: 'otp', timestamp: SENT_S + 127 }], recoverySentAt: SENT })
+    expect(isUnfinishedResetSession(s, null)).toBe(true)
+  })
+
+  it('stops flagging it once this device finished that reset', () => {
+    const s = sessionWith({ amr: [{ method: 'otp', timestamp: SENT_S + 127 }], recoverySentAt: SENT })
+    expect(isUnfinishedResetSession(s, 'sess-1')).toBe(false)
+    // …but a completion recorded for a different session does not count
+    expect(isUnfinishedResetSession(s, 'sess-other')).toBe(true)
+  })
+
+  it('ignores a password sign-in, even with a reset email outstanding', () => {
+    const s = sessionWith({ amr: [{ method: 'password', timestamp: SENT_S + 60 }], recoverySentAt: SENT })
+    expect(isUnfinishedResetSession(s, null)).toBe(false)
+  })
+
+  it('ignores an emailed-link sign-in when no reset email was ever sent (signup confirmation)', () => {
+    const s = sessionWith({ amr: [{ method: 'otp', timestamp: SENT_S }], recoverySentAt: null })
+    expect(isUnfinishedResetSession(s, null)).toBe(false)
+  })
+
+  it('ignores an emailed-link sign-in that does not follow the reset email', () => {
+    const before = sessionWith({ amr: [{ method: 'otp', timestamp: SENT_S - 5 }], recoverySentAt: SENT })
+    const daysLater = sessionWith({ amr: [{ method: 'otp', timestamp: SENT_S + 3 * 86400 }], recoverySentAt: SENT })
+    expect(isUnfinishedResetSession(before, null)).toBe(false)
+    expect(isUnfinishedResetSession(daysLater, null)).toBe(false)
+  })
+
+  it('is false for a missing session or an undecodable token', () => {
+    expect(isUnfinishedResetSession(null, null)).toBe(false)
+    expect(isUnfinishedResetSession({ access_token: 'not-a-jwt', user: {} }, null)).toBe(false)
+  })
+})
+
+describe('sessionIdOf', () => {
+  it('reads the session_id claim, or null', () => {
+    expect(sessionIdOf({ access_token: jwt({ session_id: 'abc' }) })).toBe('abc')
+    expect(sessionIdOf({ access_token: 'junk' })).toBeNull()
+    expect(sessionIdOf(null)).toBeNull()
+  })
+})
+
+describe('formatRecoveryDiagnostics', () => {
+
+  it('packs the state at the moment of failure into one short code', () => {
+    expect(formatRecoveryDiagnostics({
+      storedSession: false, storageWritable: true, hasTokens: true, guard: true,
+      navType: 'reload', controlled: true, ageS: 42, events: ['INITIAL_SESSION', 'PASSWORD_RECOVERY'],
+    })).toBe('s0 w1 t1 g1 nr c1 a42 e:IP')
+  })
+
+  it('marks unknowns rather than guessing them', () => {
+    expect(formatRecoveryDiagnostics({})).toBe('s? w? t? g? n? c? a? e:')
   })
 })

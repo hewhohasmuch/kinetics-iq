@@ -97,6 +97,16 @@ export async function requestPasswordReset(email) {
   if (error) throw error
 }
 
+/**
+ * Re-establish a session from a recovery link's own tokens. The fallback for
+ * a recovery session that vanished from storage before the new password was
+ * saved — see authRedirect.js.
+ */
+export async function restoreSession({ access_token, refresh_token }) {
+  const { error } = await getClient().auth.setSession({ access_token, refresh_token })
+  if (error) throw error
+}
+
 /** Set a new password for the signed-in (recovery) session. */
 export async function updatePassword(password) {
   const { error } = await getClient().auth.updateUser({ password })

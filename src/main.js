@@ -25,8 +25,9 @@ import { LoginView }         from './ui/LoginView.js'
 import { PatientsView }      from './ui/PatientsView.js'
 import { isConfigured, getSession, onAuthChange } from './core/supabase.js'
 import { initSync }          from './core/sync.js'
-import { parseAuthRedirect, beginRecovery, isRecoveryPending, endRecovery, GENERIC_LINK_ERROR } from './core/authRedirect.js'
-import { loadPatients, clearAllLocalData, migrateInlineImages } from './core/storage.js'
+import { parseAuthRedirect, readRecoveryTokens, beginRecovery, isRecoveryPending, endRecovery,
+         isUnfinishedResetSession, noteAuthEvent, GENERIC_LINK_ERROR } from './core/authRedirect.js'
+import { loadPatients, clearAllLocalData, migrateInlineImages, loadSettings } from './core/storage.js'
 
 const app = document.getElementById('app')
 let currentView = null
@@ -91,12 +92,15 @@ async function boot() {
   // in, after which the recovery session is indistinguishable from a
   // returning clinician. Read-only here — see the replaceState below.
   const redirect = parseAuthRedirect(window.location.hash)
-  if (redirect === 'recovery') beginRecovery()
+  // The link's tokens are held too, as a fallback if the session they create
+  // has vanished by the time the new password is saved (see authRedirect.js).
+  if (redirect === 'recovery') beginRecovery(readRecoveryTokens(window.location.hash))
 
   let routed = false
   onAuthChange((event) => {
     // Event names only — never the session, which carries the token.
     if (import.meta.env.DEV) console.debug('[auth]', event)
+    noteAuthEvent(event)
 
     if (event === 'SIGNED_OUT') {
       endRecovery()
@@ -124,6 +128,14 @@ async function boot() {
   // the client consumed it would stop the link from signing in at all.
   if (redirect) {
     history.replaceState(null, '', window.location.pathname + window.location.search)
+  }
+
+  // A reset link spent by an OLDER cached build (its service worker served
+  // the old app, which signed in and walked past the password form) leaves an
+  // ordinary-looking session behind. Recognise it and finish the reset.
+  if (session && !isRecoveryPending() &&
+      isUnfinishedResetSession(session, loadSettings().recovery_completed_session)) {
+    beginRecovery()
   }
 
   routed = true
