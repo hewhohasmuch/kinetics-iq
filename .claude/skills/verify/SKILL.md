@@ -9,6 +9,7 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 
 - Local-only mode (no login): `npx vite --host --port 5174 --strictPort` — HTTPS via basic-ssl, use `ignoreHTTPSErrors: true` in Playwright.
 - Cloud mode: set `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` as process env vars when launching vite (no `.env.local` needed). A ~100-line Node mock covers everything supabase-js calls: `POST /auth/v1/token` (return a GoTrue session payload with a base64url fake JWT), `POST /auth/v1/logout` (204), `GET|POST /rest/v1/patients` and `/rest/v1/sessions` (upsert = merge by `id`, GET = full array). CORS `*` on everything, 204 on OPTIONS.
+- Password reset adds `POST /auth/v1/recover` (200 `{}`; return 429 to exercise the "couldn't send" path), `GET /auth/v1/user` (supabase-js calls it to validate a link's token) and `PUT /auth/v1/user` (the new password). A recovery link is `/#access_token=<fake jwt>&expires_in=3600&refresh_token=x&token_type=bearer&type=recovery`. `scripts/verify-password-reset.mjs` is a self-contained version: it starts its own mock and vite on 5175, so extend it rather than starting over. In dev, `main.js` logs auth **event names** (never sessions) as `[auth] <EVENT>`, which is how that script asserts event order.
 
 ## Fake camera with a detectable pose
 

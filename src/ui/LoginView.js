@@ -1,27 +1,42 @@
 /**
  * LoginView.js
  *
- * Clinician sign-in / sign-up. Shown at boot when Supabase is configured
- * and no cached auth session exists. After one successful login the cached
+ * Clinician sign-in / sign-up, plus the two halves of password reset:
+ * 'forgot' requests the email, 'recovery' sets the new password once the
+ * link has landed and main.js has routed here with the recovery guard set
+ * (see core/authRedirect.js). Shown at boot when Supabase is configured and
+ * no cached auth session exists. After one successful login the cached
  * session lets the PWA boot straight into the app, even offline.
  */
 
-import { signIn, signUp } from '../core/supabase.js'
+import { signIn, signUp, requestPasswordReset, updatePassword } from '../core/supabase.js'
+import { endRecovery } from '../core/authRedirect.js'
+
+const MODES = {
+  signin:   { heading: 'Sign in',            submit: 'Sign in',           busy: 'Signing in…' },
+  signup:   { heading: 'Create account',     submit: 'Sign up',           busy: 'Creating account…' },
+  forgot:   { heading: 'Reset password',     submit: 'Send reset link',   busy: 'Sending…' },
+  recovery: { heading: 'Set a new password', submit: 'Save new password', busy: 'Saving…' },
+}
 
 export class LoginView {
   /**
    * @param {HTMLElement} container - the #app div
    * @param {Function}    onLogin   - called after successful sign-in
+   * @param {{mode?: 'signin'|'recovery', error?: string}} [options]
    */
-  constructor(container, onLogin) {
-    this.container = container
-    this.onLogin   = onLogin
-    this._mode     = 'signin'   // 'signin' | 'signup'
+  constructor(container, onLogin, { mode = 'signin', error = null } = {}) {
+    this.container     = container
+    this.onLogin       = onLogin
+    this._mode         = mode   // 'signin' | 'signup' | 'forgot' | 'recovery'
+    this._initialError = error
   }
 
   mount() {
     this.container.innerHTML = this._template()
     this._bind()
+    this._setMode(this._mode)
+    if (this._initialError) this._showError(this._initialError)
   }
 
   unmount() {
@@ -34,8 +49,11 @@ export class LoginView {
     this._form     = document.getElementById('login-form')
     this._email    = document.getElementById('login-email')
     this._password = document.getElementById('login-password')
+    this._confirm  = document.getElementById('login-confirm')
     this._submit   = document.getElementById('login-submit')
     this._toggle   = document.getElementById('login-toggle')
+    this._forgot   = document.getElementById('login-forgot')
+    this._note     = document.getElementById('login-note')
     this._error    = document.getElementById('login-error')
     this._info     = document.getElementById('login-info')
 
@@ -43,51 +61,136 @@ export class LoginView {
       e.preventDefault()
       this._handleSubmit()
     })
-    this._toggle.addEventListener('click', () => this._toggleMode())
+    this._toggle.addEventListener('click', () => {
+      this._setMode(this._mode === 'signin' ? 'signup' : 'signin')
+    })
+    this._forgot.addEventListener('click', () => this._setMode('forgot'))
   }
 
-  _toggleMode() {
-    this._mode = this._mode === 'signin' ? 'signup' : 'signin'
-    const signin = this._mode === 'signin'
-    document.getElementById('login-heading').textContent = signin ? 'Sign in' : 'Create account'
-    this._submit.textContent = signin ? 'Sign in' : 'Sign up'
-    this._toggle.textContent = signin
-      ? 'New here? Create an account'
+  /**
+   * Show exactly the fields a mode needs. Hidden inputs are also disabled so
+   * their `required` doesn't block submitting the visible ones.
+   */
+  _setMode(mode) {
+    this._mode = mode
+    const m = MODES[mode]
+    const show = (el, on) => {
+      el.style.display = on ? '' : 'none'
+      if (el.tagName === 'INPUT') el.disabled = !on
+    }
+
+    document.getElementById('login-heading').textContent = m.heading
+    this._submit.textContent = m.submit
+
+    show(this._email,    mode !== 'recovery')
+    show(this._password, mode !== 'forgot')
+    show(this._confirm,  mode === 'recovery')
+    show(this._forgot,   mode === 'signin')
+    // Recovery is a signed-in session with one job: no way out but through
+    show(this._toggle,   mode !== 'recovery')
+    show(this._note,     mode === 'recovery' || mode === 'forgot')
+
+    this._password.autocomplete = mode === 'signin' ? 'current-password' : 'new-password'
+    this._password.placeholder  = mode === 'recovery' ? 'New password' : 'Password'
+    this._toggle.textContent =
+      mode === 'signin' ? 'New here? Create an account'
+      : mode === 'forgot' ? 'Back to sign in'
       : 'Already have an account? Sign in'
+    this._note.textContent = mode === 'recovery'
+      ? 'Opened this link on iPhone? It opens in Safari — once saved, use the new password to sign in to the installed app too.'
+      : "Enter your account email and we'll send a link to set a new password."
+
     this._hideMessages()
   }
 
   async _handleSubmit() {
+    const mode = this._mode
+    this._hideMessages()
+
+    if (mode === 'recovery' && this._password.value !== this._confirm.value) {
+      this._showError("Passwords don't match.")
+      return
+    }
+
+    this._submit.disabled    = true
+    this._submit.textContent = MODES[mode].busy
+
+    try {
+      if (mode === 'signin')        await this._doSignIn()
+      else if (mode === 'signup')   await this._doSignUp()
+      else if (mode === 'forgot')   await this._doForgot()
+      else if (mode === 'recovery') await this._doRecovery()
+    } finally {
+      this._submit.disabled    = false
+      this._submit.textContent = MODES[this._mode].submit
+    }
+  }
+
+  async _doSignIn() {
     const email    = this._email.value.trim()
     const password = this._password.value
     if (!email || !password) return
-
-    this._hideMessages()
-    this._submit.disabled  = true
-    this._submit.textContent = this._mode === 'signin' ? 'Signing in…' : 'Creating account…'
-
     try {
-      if (this._mode === 'signin') {
-        await signIn(email, password)
+      await signIn(email, password)
+      this.onLogin()
+    } catch (err) {
+      this._showError(err.message || 'Something went wrong — try again.')
+    }
+  }
+
+  async _doSignUp() {
+    const email    = this._email.value.trim()
+    const password = this._password.value
+    if (!email || !password) return
+    try {
+      const session = await signUp(email, password)
+      if (session) {
         this.onLogin()
       } else {
-        const session = await signUp(email, password)
-        if (session) {
-          this.onLogin()
-        } else {
-          // Project requires email confirmation before first sign-in
-          this._info.textContent   = 'Check your email to confirm your account, then sign in.'
-          this._info.style.display = 'block'
-          this._toggleMode()
-        }
+        // Project requires email confirmation before first sign-in
+        this._setMode('signin')
+        this._showInfo('Check your email to confirm your account, then sign in.')
       }
     } catch (err) {
-      this._error.textContent   = err.message || 'Something went wrong — try again.'
-      this._error.style.display = 'block'
-    } finally {
-      this._submit.disabled    = false
-      this._submit.textContent = this._mode === 'signin' ? 'Sign in' : 'Sign up'
+      this._showError(err.message || 'Something went wrong — try again.')
     }
+  }
+
+  async _doForgot() {
+    const email = this._email.value.trim()
+    if (!email) return
+    try {
+      await requestPasswordReset(email)
+      // Same words whether or not the account exists — the form must not
+      // reveal which emails have accounts.
+      this._showInfo('If an account exists for that email, a reset link is on its way.')
+    } catch {
+      // Rate limit, delivery or network failure. Never imply a send; the raw
+      // error is withheld so the wording stays account-neutral.
+      this._showError("We couldn't send a reset link right now — please try again later.")
+    }
+  }
+
+  async _doRecovery() {
+    try {
+      await updatePassword(this._password.value)
+    } catch (err) {
+      // Guard stays set and the form stays up — the password is unchanged
+      this._showError(err.message || "Couldn't save the new password — try again.")
+      return
+    }
+    endRecovery()
+    this.onLogin()
+  }
+
+  _showError(text) {
+    this._error.textContent   = text
+    this._error.style.display = 'block'
+  }
+
+  _showInfo(text) {
+    this._info.textContent   = text
+    this._info.style.display = 'block'
   }
 
   _hideMessages() {
@@ -105,6 +208,7 @@ export class LoginView {
           <div class="login-sub">Range of motion, measured with your camera</div>
 
           <h1 id="login-heading" class="login-heading">Sign in</h1>
+          <p id="login-note" class="login-note" style="display:none"></p>
 
           <form id="login-form" class="login-form">
             <input id="login-email" class="login-input" type="email"
@@ -113,12 +217,18 @@ export class LoginView {
             <input id="login-password" class="login-input" type="password"
               placeholder="Password" autocomplete="current-password"
               minlength="6" required />
+            <input id="login-confirm" class="login-input" type="password"
+              placeholder="Confirm new password" autocomplete="new-password"
+              minlength="6" required style="display:none" disabled />
             <button id="login-submit" class="btn-primary login-submit" type="submit">Sign in</button>
           </form>
 
           <div id="login-error" class="login-error" style="display:none"></div>
           <div id="login-info"  class="login-info"  style="display:none"></div>
 
+          <button id="login-forgot" class="login-toggle login-forgot" type="button">
+            Forgot password?
+          </button>
           <button id="login-toggle" class="login-toggle" type="button">
             New here? Create an account
           </button>
@@ -159,6 +269,13 @@ export class LoginView {
           font-weight: 600;
           color: #f0f0f0;
           margin-bottom: 16px;
+        }
+
+        .login-note {
+          font-size: 13px;
+          color: #999;
+          line-height: 1.4;
+          margin: -6px 0 14px;
         }
 
         .login-form {
@@ -218,6 +335,12 @@ export class LoginView {
           font-size: 13px;
           cursor: pointer;
           padding: 8px;
+        }
+
+        .login-forgot {
+          display: block;
+          margin: 10px auto 0;
+          color: #888;
         }
       </style>
     `
