@@ -9,14 +9,16 @@
  * session lets the PWA boot straight into the app, even offline.
  */
 
-import { signIn, signUp, requestPasswordReset, updatePassword } from '../core/supabase.js'
-import { endRecovery } from '../core/authRedirect.js'
+import { signIn, signUp, requestPasswordReset, updatePassword, restoreSession, getSession } from '../core/supabase.js'
+import { endRecovery, recoveryTokens, sessionIdOf, collectRecoveryDiagnostics } from '../core/authRedirect.js'
+import { saveSettings } from '../core/storage.js'
 
 const MODES = {
   signin:   { heading: 'Sign in',            submit: 'Sign in',           busy: 'Signing in…' },
   signup:   { heading: 'Create account',     submit: 'Sign up',           busy: 'Creating account…' },
   forgot:   { heading: 'Reset password',     submit: 'Send reset link',   busy: 'Sending…' },
   recovery: { heading: 'Set a new password', submit: 'Save new password', busy: 'Saving…' },
+  done:     { heading: 'Password saved',     submit: 'Continue',          busy: 'Continuing…' },
 }
 
 export class LoginView {
@@ -28,7 +30,7 @@ export class LoginView {
   constructor(container, onLogin, { mode = 'signin', error = null } = {}) {
     this.container     = container
     this.onLogin       = onLogin
-    this._mode         = mode   // 'signin' | 'signup' | 'forgot' | 'recovery'
+    this._mode         = mode   // 'signin' | 'signup' | 'forgot' | 'recovery' | 'done'
     this._initialError = error
   }
 
@@ -82,13 +84,14 @@ export class LoginView {
     document.getElementById('login-heading').textContent = m.heading
     this._submit.textContent = m.submit
 
-    show(this._email,    mode !== 'recovery')
-    show(this._password, mode !== 'forgot')
+    const setting = mode === 'recovery' || mode === 'done'
+    show(this._email,    !setting)
+    show(this._password, mode !== 'forgot' && mode !== 'done')
     show(this._confirm,  mode === 'recovery')
     show(this._forgot,   mode === 'signin')
     // Recovery is a signed-in session with one job: no way out but through
-    show(this._toggle,   mode !== 'recovery')
-    show(this._note,     mode === 'recovery' || mode === 'forgot')
+    show(this._toggle,   !setting)
+    show(this._note,     setting || mode === 'forgot')
 
     this._password.autocomplete = mode === 'signin' ? 'current-password' : 'new-password'
     this._password.placeholder  = mode === 'recovery' ? 'New password' : 'Password'
@@ -96,7 +99,7 @@ export class LoginView {
       mode === 'signin' ? 'New here? Create an account'
       : mode === 'forgot' ? 'Back to sign in'
       : 'Already have an account? Sign in'
-    this._note.textContent = mode === 'recovery'
+    this._note.textContent = setting
       ? 'Opened this link on iPhone? It opens in Safari — once saved, use the new password to sign in to the installed app too.'
       : "Enter your account email and we'll send a link to set a new password."
 
@@ -120,6 +123,7 @@ export class LoginView {
       else if (mode === 'signup')   await this._doSignUp()
       else if (mode === 'forgot')   await this._doForgot()
       else if (mode === 'recovery') await this._doRecovery()
+      else if (mode === 'done')     this.onLogin()
     } finally {
       this._submit.disabled    = false
       this._submit.textContent = MODES[this._mode].submit
@@ -172,14 +176,48 @@ export class LoginView {
   }
 
   async _doRecovery() {
+    const password = this._password.value
+    let fallbackRef = null
     try {
-      await updatePassword(this._password.value)
+      await updatePassword(password)
     } catch (err) {
-      // Guard stays set and the form stays up — the password is unchanged
-      this._showError(err.message || "Couldn't save the new password — try again.")
+      if (err?.name !== 'AuthSessionMissingError') {
+        // Guard stays set and the form stays up — the password is unchanged
+        this._showError(err.message || "Couldn't save the new password — try again.")
+        return
+      }
+      // The link's session has vanished from storage (seen on iPhone Safari,
+      // cause unknown — see authRedirect.js). Record the device's state, then
+      // rebuild the session from the link's own tokens and try once more.
+      fallbackRef = collectRecoveryDiagnostics()
+      console.warn('[recovery] session missing at save:', fallbackRef)
+      const tokens = recoveryTokens()
+      try {
+        if (!tokens) throw new Error('no link tokens held')
+        await restoreSession(tokens)
+        await updatePassword(password)
+      } catch {
+        // Nothing left to set a password on. Release the guard and hand the
+        // clinician the one way forward: a fresh link.
+        endRecovery()
+        this._setMode('forgot')
+        this._showError(`This reset session has ended — request a new link. (ref ${fallbackRef})`)
+        return
+      }
+    }
+
+    // Mark this session's reset finished, so boot() doesn't mistake it for
+    // one an older cached build left unfinished (isUnfinishedResetSession).
+    saveSettings({ recovery_completed_session: sessionIdOf(await getSession()) })
+    endRecovery()
+
+    if (fallbackRef) {
+      // The save only worked through the fallback. Show the reference before
+      // moving on — it is the evidence for why the session vanished.
+      this._setMode('done')
+      this._showInfo(`New password saved. (ref ${fallbackRef})`)
       return
     }
-    endRecovery()
     this.onLogin()
   }
 
