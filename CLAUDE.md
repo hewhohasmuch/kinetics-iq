@@ -8,16 +8,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev          # start dev server (HTTPS + LAN-accessible, required for camera on iPhone)
 npm run dev:https    # alias — same as dev
 npm run build        # vite build
+npm run preview      # serve the production build (installs the service worker; dev never does)
 npm test             # run Vitest unit tests (Node environment, no browser needed)
 npm run verify:e2e   # drive the real app in Chromium against a fake camera (few minutes)
+npm run check:schema # ask the live Supabase project whether `sessions` has every column this build writes
 ```
+
+The Vite config is **`vite.config.mjs`, and it must stay the only one.** Vite resolves `vite.config.js` *before* `.mjs`, so a second config file silently wins. That happened here: a stale `vite.config.js` from the initial commit shadowed the real config, and the shipped service worker never cached the MediaPipe model or WASM, while the config everyone read said it did. Check the generated `dist/sw.js` for `mediapipe-models` after touching the Workbox setup.
 
 Run a single test file:
 ```bash
 npx vitest run src/core/angle.test.js
 ```
 
-To run the app in cloud mode locally, copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`. Without those set, the app runs local-only (no login, no sync) — see Accounts & cloud sync below. Apply `supabase/schema.sql` to a fresh project; for a project that predates cloud image sync, apply `supabase/migrations/0001_session_images.sql` instead (adds the `peak/min_frame_path` columns and the private `session-images` Storage bucket + RLS). Snapshot upload silently no-ops until that bucket exists. An existing project also needs `0002_face_redaction.sql` (a column the app no longer uses — head redaction was removed in #17 — kept as the only record of which stored snapshots had any redaction applied), `0003_angle_metadata.sql` (`angle_filter`, `angle_convention`) `0004_calibration_provenance.sql` (`calibrated`, `calibration_offset`) and `0005_segment_tilt.sql` (`max_segment_tilt`). **Apply all of them before deploying**, because PostgREST 4xxs an insert naming an unknown column and `sync.js` drops permanent errors, so sessions would stop syncing silently rather than fail loudly.
+To run the app in cloud mode locally, copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`. Without those set, the app runs local-only (no login, no sync) — see Accounts & cloud sync below. Apply `supabase/schema.sql` to a fresh project; for a project that predates cloud image sync, apply `supabase/migrations/0001_session_images.sql` instead (adds the `peak/min_frame_path` columns and the private `session-images` Storage bucket + RLS). Snapshot upload silently no-ops until that bucket exists. An existing project also needs `0002_face_redaction.sql` (a column the app no longer uses — head redaction was removed in #17 — kept as the only record of which stored snapshots had any redaction applied), `0003_angle_metadata.sql` (`angle_filter`, `angle_convention`), `0004_calibration_provenance.sql` (`calibrated`, `calibration_offset`), `0005_segment_tilt.sql` (`max_segment_tilt`) and `0006_landmark_verification.sql` (`landmark_space`, `model_id`/`model_version`, `landmarks_raw`, `frame_angle_raw_*`, `frame_tilt_*`, `verifications`). **Apply all of them before deploying.** PostgREST rejects a write naming an unknown column (`PGRST204` / `42703`). `sync.js` treats those codes as retryable rather than permanent: it keeps the ops, shows a `schema_mismatch` sync state, and drains once the SQL is applied. So a missed migration stalls sync visibly instead of losing data. Run `npm run check:schema` to catch it before users' devices do (it skips when the Supabase env vars are unset).
 
 `npm run verify:e2e` covers the part unit tests can't reach — camera start, MediaPipe detection, the overlay canvas, snapshot compositing, and what actually lands in localStorage. It builds a fake-camera y4m from a real pose photo (mirrored halfway through so the measured angle moves) and asserts, among other things, that the saved min/max are values the readout actually displayed. See `scripts/e2e/README.md`; add `--headed` to watch it. Headless Chromium runs BlazePose on CPU at ~2Hz rather than the app's 10Hz, so anything sensitive to the real frame rate still needs a device check.
 
@@ -147,7 +151,7 @@ Two consequences for anyone changing `_runDetection()`:
 
 ### MediaPipe Pose loading (`src/detection/pose.js`)
 
-`PoseDetector.init()` loads the BlazePose Full model (~7MB) from Google's CDN on first use. The WASM runtime is loaded from jsDelivr. Both are cached by the Workbox service worker (90-day TTL) so subsequent loads are instant and offline-capable.
+`PoseDetector.init()` loads the BlazePose Full model (~7MB) from Google's CDN on first use. The WASM runtime is loaded from jsDelivr. Both are cached by the Workbox service worker (`mediapipe-models` / `mediapipe-wasm` CacheFirst rules in `vite.config.mjs`, 90-day TTL) so subsequent loads are instant and offline-capable. Production builds only: the dev server installs no service worker.
 
 `PoseDetector.detect()` accepts **either** a video element or a canvas — `detectForVideo` takes any `TexImageSource`. In the app it is always given `MeasureView`'s per-tick frame-buffer canvas, never the live `<video>`, so that detection and the stored snapshot read identical pixels (see "The video frame is read once per tick" above). It therefore reads `videoWidth ?? width` / `videoHeight ?? height` rather than assuming a video element, and its parameter is named `source` for the same reason. MediaPipe returns normalized landmarks (0–1) plus metric world landmarks; the detector multiplies normalized coords by those dimensions to produce video pixel coordinates for the 2D path, and passes world `{x,y,z}` through for the 3D path.
 
