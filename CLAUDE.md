@@ -194,7 +194,7 @@ Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfi
 
 ### Separation of concerns
 
-`src/core/` is pure and Node-testable. The exceptions: `CalibrationManager`/`storage.js` (localStorage), `imageStore.js` (IndexedDB), `sync.js`/`frames.js` (network, no DOM), and `pdf.js`/`frameRender.js` (Blob in, Blob out; `frameRender` imports overlay primitives on purpose — one renderer beats a clean layer boundary). `landmarks.js` and `frameCrop.js` are pure so anatomy and crop questions never need MediaPipe or a DOM; `detection/overlay.js` imports `frameCrop`, not the reverse. DOM, camera and canvas work lives in `src/ui/` and `src/detection/`. `src/detection/aruco.js` is dead pre-MediaPipe code; don't build on it.
+`src/core/` is pure and Node-testable. The exceptions: `CalibrationManager`/`storage.js` (localStorage), `imageStore.js` (IndexedDB), `sync.js`/`frames.js` (network, no DOM), and `pdf.js`/`frameRender.js` (Blob in, Blob out; `frameRender` imports overlay primitives on purpose — one renderer beats a clean layer boundary). `landmarks.js` and `frameCrop.js` are pure so anatomy and crop questions never need MediaPipe or a DOM; `detection/overlay.js` imports `frameCrop`, not the reverse. DOM, camera and canvas work lives in `src/ui/` and `src/detection/`.
 
 ### MediaPipe loading (`src/detection/pose.js`)
 
