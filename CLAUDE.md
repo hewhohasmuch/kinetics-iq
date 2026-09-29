@@ -83,7 +83,7 @@ Applying the hinge rule to everything once inverted the shoulder scale. `toInter
 | 2D landmarks | 0.1° | 133.8° | 133.7° (+3%) |
 | 3D world | 13.6° | 115.4° | 101.8° (−21%) |
 
-Depth error reverses sign across the range, so no single-offset calibration can fix it, and rigid world-space bone lengths drift **7.8% RMS** between frames. Don't reintroduce the 3D path. (`PoseDetector.getJointPoints3D()` still exists but nothing calls it; world landmarks are now used only for `segmentTilt()`.) Two hypotheses were tested and killed — don't re-derive them: (1) "the forearm was ~38° out of plane" (a ±2px elbow shift swings the inferred tilt 14°); (2) "constrain to fixed bone lengths and solve depth" (collapses to the 2D angle at min flexion). **Bone-length drift is a diagnostic, not a corrector.**
+Depth error reverses sign across the range, so no single-offset calibration can fix it, and rigid world-space bone lengths drift **7.8% RMS** between frames. Don't reintroduce the 3D path; world landmarks are used only for `segmentTilt()`. Two hypotheses were tested and killed — don't re-derive them: (1) "the forearm was ~38° out of plane" (a ±2px elbow shift swings the inferred tilt 14°); (2) "constrain to fixed bone lengths and solve depth" (collapses to the 2D angle at min flexion). **Bone-length drift is a diagnostic, not a corrector.**
 
 The remaining error is **landmark placement**, concentrated in the proximal point: in the elbow min frame the shoulder→elbow vector leans 11.5° off the humerus, while the forearm is within 0.5°. Landmark 12 sits near the acromion, not the humeral head. One frame, one subject — **don't hardcode a correction**; it needs goniometer data across joints and subjects.
 

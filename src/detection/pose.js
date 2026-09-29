@@ -74,8 +74,8 @@ export class PoseDetector {
     }
 
     const lmNorm = result.landmarks[0]
-    // Metric 3D landmarks (meters, relative to hip midpoint). May be absent for
-    // a frame — callers fall back to the 2D center when world is undefined.
+    // Metric 3D landmarks (meters, relative to hip midpoint). Used only by
+    // segmentTilt(), never for the angle. May be absent for a frame.
     const wlm    = result.worldLandmarks?.[0] ?? null
     // An HTMLVideoElement exposes videoWidth/videoHeight; a canvas exposes
     // width/height. MeasureView passes the latter.
@@ -143,8 +143,7 @@ export class PoseDetector {
   }
 
   // Drop-in replacement for ArucoDetector.getJointPoints().
-  // Returns 2D { x, y } video-pixel points — used for the overlay and as the
-  // fallback when 3D world data is unavailable.
+  // Returns 2D { x, y } video-pixel points — the angle is measured from these.
   getJointPoints(markers) {
     const p = markers['proximal']
     const j = markers['joint']
@@ -154,23 +153,6 @@ export class PoseDetector {
       proximal: p.center,
       joint:    j.center,
       distal:   d.center,
-    }
-  }
-
-  // 3D variant — returns world-space { x, y, z } points in meters so the angle
-  // is computed in real space (immune to camera-perspective foreshortening).
-  // Returns null if any marker lacks world data; the caller then falls back to
-  // the 2D getJointPoints() so a bad frame degrades rather than drops.
-  getJointPoints3D(markers) {
-    const p = markers['proximal']
-    const j = markers['joint']
-    const d = markers['distal']
-    if (!p || !j || !d) return null
-    if (!p.world || !j.world || !d.world) return null
-    return {
-      proximal: p.world,
-      joint:    j.world,
-      distal:   d.world,
     }
   }
 
@@ -193,7 +175,7 @@ export class PoseDetector {
    * nothing finer. Show the clinician a caution, never a number.
    *
    * Returns the larger of the two segments' tilt, or null when any marker
-   * lacks world data -- the same condition getJointPoints3D() returns null on.
+   * lacks world data.
    *
    * @param {object} markers - from detect()
    * @returns {number|null} degrees; 0 = the segment lies in the image plane
