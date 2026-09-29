@@ -123,7 +123,7 @@ describe('PoseDetector', () => {
     expect(result.markers['distal'].center.x).toBeCloseTo(300)
   })
 
-  it('getJointPoints3D returns world coords when worldLandmarks present', async () => {
+  it('passes world coords through on each marker when worldLandmarks present', async () => {
     await detector.init()
     // knee right: proximal=24, joint=26, distal=28
     const world = makeWorld({
@@ -133,18 +133,17 @@ describe('PoseDetector', () => {
     })
     mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks()], worldLandmarks: [world] })
     const { markers } = detector.detect(makeVideoEl())
-    const pts = detector.getJointPoints3D(markers)
-    expect(pts).not.toBeNull()
-    expect(pts.proximal).toEqual({ x: 0.1, y: 0.2, z: 0.3 })
-    expect(pts.joint).toEqual({ x: 0.4, y: 0.5, z: 0.6 })
-    expect(pts.distal).toEqual({ x: 0.7, y: 0.8, z: 0.9 })
+    expect(markers.proximal.world).toEqual({ x: 0.1, y: 0.2, z: 0.3 })
+    expect(markers.joint.world).toEqual({ x: 0.4, y: 0.5, z: 0.6 })
+    expect(markers.distal.world).toEqual({ x: 0.7, y: 0.8, z: 0.9 })
   })
 
-  it('getJointPoints3D returns null when worldLandmarks absent (2D fallback still works)', async () => {
+  it('leaves world undefined when worldLandmarks absent (2D points still work)', async () => {
     await detector.init()
     mockDetectForVideo.mockReturnValue({ landmarks: [makeLandmarks()] })  // no worldLandmarks
     const { markers } = detector.detect(makeVideoEl())
-    expect(detector.getJointPoints3D(markers)).toBeNull()
+    expect(markers.joint.world).toBeUndefined()
+    expect(detector.segmentTilt(markers)).toBeNull()
     expect(detector.getJointPoints(markers)).not.toBeNull()
   })
 
@@ -296,11 +295,9 @@ describe('PoseDetector._resolveLandmark (midpoint)', () => {
     mockDetectForVideo.mockReturnValue({ landmarks: [lm], worldLandmarks: [world] })
 
     const { markers } = detector.detect({ videoWidth: 1000, videoHeight: 1000 })
-    const pts = detector.getJointPoints3D(markers)
-    expect(pts).not.toBeNull()
     // proximal world = midpoint of knee(0.2,0.2,0.2) and ankle(0.4,0.6,0.8) = (0.3,0.4,0.5)
-    expect(pts.proximal.x).toBeCloseTo(0.3)
-    expect(pts.proximal.y).toBeCloseTo(0.4)
-    expect(pts.proximal.z).toBeCloseTo(0.5)
+    expect(markers.proximal.world.x).toBeCloseTo(0.3)
+    expect(markers.proximal.world.y).toBeCloseTo(0.4)
+    expect(markers.proximal.world.z).toBeCloseTo(0.5)
   })
 })
