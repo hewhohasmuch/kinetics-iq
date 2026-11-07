@@ -73,6 +73,10 @@ export class MeasureView {
     this.container.innerHTML = this._template()
     this._bindElements()
     this._bindEvents()
+    // Before anything reads the offset: a zero stored for another patient,
+    // joint or side (this view always mounts on its default joint) must not
+    // be applied to this one.
+    this._syncCalibrationContext()
     this._updateCalibrationUI()
     this._updatePatientChip()
     this._updateStorageGauge()
@@ -1429,7 +1433,7 @@ export class MeasureView {
     this._renderPositions(joint)
     this._selectPosition(null)
     this._updateSelectionLabel()
-    this.calibration.clear()
+    this._syncCalibrationContext()
     this._updateCalibrationUI()
   }
 
@@ -1440,8 +1444,18 @@ export class MeasureView {
       btn.classList.toggle('active', btn.dataset.side === side)
     })
     this._updateSelectionLabel()
-    this.calibration.clear()
+    this._syncCalibrationContext()
     this._updateCalibrationUI()
+  }
+
+  /** Tell the calibration what is being measured; it drops a zero captured
+   *  for any other patient, joint or side. */
+  _syncCalibrationContext() {
+    this.calibration.setContext({
+      patientId: getActivePatientId(),
+      joint:     this._joint,
+      side:      this._side,
+    })
   }
 
   _selectPosition(position) {

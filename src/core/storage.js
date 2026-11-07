@@ -285,6 +285,16 @@ export function getActivePatientId() {
   return loadSettings().active_patient_id ?? null
 }
 
+// Settings keys that together mean "no calibration offset captured". Every path
+// that resets calibration spreads this, so none can clear the offset but leave
+// the captured flag behind — which made the next session claim "calibrated"
+// for a raw reading and suppressed the extension-floor caveat in its export.
+const CLEARED_CALIBRATION = {
+  calibration_offset:   0,
+  calibration_captured: false,
+  calibration_context:  null,
+}
+
 /**
  * Set the active patient. Changing patient also clears the calibration
  * offset — the "zero" captured for one person's setup doesn't transfer to
@@ -293,7 +303,7 @@ export function getActivePatientId() {
 export function setActivePatientId(id) {
   const current = getActivePatientId()
   if (current === (id ?? null)) return true
-  return saveSettings({ active_patient_id: id ?? null, calibration_offset: 0 })
+  return saveSettings({ active_patient_id: id ?? null, ...CLEARED_CALIBRATION })
 }
 
 // ─── Outbox (pending sync ops) ────────────────────────────────────────────────
@@ -435,7 +445,7 @@ export function clearAllLocalData() {
     // copies are in the cloud and re-download on next login; any un-uploaded
     // blobs should already have been flagged to the user before sign-out.
     imageStore.clearAll()
-    saveSettings({ active_patient_id: null, calibration_offset: 0 })
+    saveSettings({ active_patient_id: null, ...CLEARED_CALIBRATION })
     return true
   } catch (e) {
     return false
@@ -563,8 +573,8 @@ export function saveSettings(updates) {
  * such a record can later be attributed to whichever account signs in here.
  *
  * IT IDENTIFIES A BROWSER PROFILE, NEVER A PERSON. It deliberately survives
- * sign-out — clearAllLocalData() resets only active_patient_id and
- * calibration_offset — so on a shared iPad the same id spans different
+ * sign-out — clearAllLocalData() resets only active_patient_id and the
+ * calibration — so on a shared iPad the same id spans different
  * clinicians. That is correct for a device id and is exactly why it must never
  * be surfaced as identifying anyone, and why `by`/`byMode` carry the person.
  *
