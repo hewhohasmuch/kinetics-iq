@@ -16,7 +16,8 @@ vi.mock('@mediapipe/tasks-vision', () => ({
   },
 }))
 
-import { PoseDetector, JOINT_CONFIG } from './pose.js'
+import { FilesetResolver } from '@mediapipe/tasks-vision'
+import { PoseDetector, JOINT_CONFIG, getPoseDetector } from './pose.js'
 
 function makeVideoEl(w = 1280, h = 720) {
   return { videoWidth: w, videoHeight: h }
@@ -299,5 +300,31 @@ describe('PoseDetector._resolveLandmark (midpoint)', () => {
     expect(markers.proximal.world.x).toBeCloseTo(0.3)
     expect(markers.proximal.world.y).toBeCloseTo(0.4)
     expect(markers.proximal.world.z).toBeCloseTo(0.5)
+  })
+})
+
+describe('PoseDetector lifetime', () => {
+  it('getPoseDetector() returns one shared instance', () => {
+    expect(getPoseDetector()).toBe(getPoseDetector())
+    expect(getPoseDetector()).toBeInstanceOf(PoseDetector)
+  })
+
+  it('init() deduplicates concurrent calls', async () => {
+    const d = new PoseDetector()
+    const a = d.init(), b = d.init()
+    expect(a).toBe(b)
+    await a
+    expect(d.isReady).toBe(true)
+  })
+
+  // The detector is shared for the life of the app, so a cached rejection
+  // (offline on first launch) would break Start Camera until a reload.
+  it('init() retries after a failed load', async () => {
+    FilesetResolver.forVisionTasks.mockRejectedValueOnce(new Error('offline'))
+    const d = new PoseDetector()
+    await expect(d.init()).rejects.toThrow('offline')
+    expect(d.isReady).toBe(false)
+    await d.init()
+    expect(d.isReady).toBe(true)
   })
 })

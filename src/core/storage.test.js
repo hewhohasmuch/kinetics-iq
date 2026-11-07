@@ -16,7 +16,7 @@ import {
   getActivePatientId, setActivePatientId,
   loadOutbox, enqueueOp, removeOp, setOutboxListener,
   mergeRemoteSessions, mergeRemotePatients,
-  clearAllLocalData, loadSettings,
+  clearAllLocalData, loadSettings, loadMeasureSelection, saveMeasureSelection,
   migrateInlineImages, setSessionFramePath, setSessionVerification, getDeviceId,
 } from './storage.js'
 import * as imageStore from './imageStore.js'
@@ -280,6 +280,27 @@ describe('clearAllLocalData', () => {
     expect(s.calibration_offset).toBe(0)
     expect(s.calibration_captured).toBe(false)
     expect(s.calibration_context).toBeNull()
+  })
+
+  it('forgets the measure selection', () => {
+    saveMeasureSelection({ patientId: 'p', joint: 'hip', side: 'left', position: 'supine' })
+    clearAllLocalData()
+    expect(loadMeasureSelection()).toBeNull()
+  })
+})
+
+// ─── Measure selection ───────────────────────────────────────────────────────
+
+describe('measure selection', () => {
+  it('is null until something is saved', () => {
+    expect(loadMeasureSelection()).toBeNull()
+  })
+
+  it('round-trips, normalising absent ids and positions to null', () => {
+    saveMeasureSelection({ patientId: 'p', joint: 'hip', side: 'left', position: 'supine' })
+    expect(loadMeasureSelection()).toEqual({ patientId: 'p', joint: 'hip', side: 'left', position: 'supine' })
+    saveMeasureSelection({ joint: 'knee', side: 'right' })
+    expect(loadMeasureSelection()).toEqual({ patientId: null, joint: 'knee', side: 'right', position: null })
   })
 })
 

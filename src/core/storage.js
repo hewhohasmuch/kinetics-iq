@@ -306,6 +306,23 @@ export function setActivePatientId(id) {
   return saveSettings({ active_patient_id: id ?? null, ...CLEARED_CALIBRATION })
 }
 
+/**
+ * The joint/side/position MeasureView last had, tagged with its patient.
+ * Raw — core/selection.js restoreSelection() decides what of it may carry over.
+ *
+ * @returns {{patientId: string|null, joint: string, side: string, position: string|null}|null}
+ */
+export function loadMeasureSelection() {
+  return loadSettings().measure_selection ?? null
+}
+
+/** @param {{patientId: string|null, joint: string, side: string, position: string|null}} selection */
+export function saveMeasureSelection({ patientId, joint, side, position }) {
+  return saveSettings({
+    measure_selection: { patientId: patientId ?? null, joint, side, position: position ?? null },
+  })
+}
+
 // ─── Outbox (pending sync ops) ────────────────────────────────────────────────
 
 /** @returns {Op[]} pending ops, oldest first */
@@ -445,7 +462,7 @@ export function clearAllLocalData() {
     // copies are in the cloud and re-download on next login; any un-uploaded
     // blobs should already have been flagged to the user before sign-out.
     imageStore.clearAll()
-    saveSettings({ active_patient_id: null, ...CLEARED_CALIBRATION })
+    saveSettings({ active_patient_id: null, measure_selection: null, ...CLEARED_CALIBRATION })
     return true
   } catch (e) {
     return false
@@ -530,6 +547,9 @@ const DEFAULT_SETTINGS = {
   // Toggled from the export confirmation sheet — there is no settings screen,
   // and the sheet is the only moment the choice is meaningful.
   export_include_initials: true,
+  // MeasureView's last joint/side/position and the patient it was for; see
+  // loadMeasureSelection().
+  measure_selection: null,
 }
 
 /**

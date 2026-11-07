@@ -3,12 +3,14 @@
  */
 
 import { Camera }            from '../detection/camera.js'
-import { PoseDetector }      from '../detection/pose.js'
+import { getPoseDetector }   from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
 import { jointAngle, toClinicalAngle, toInteriorAngle, motionTerms, MedianFilter3, OneEuroFilter } from '../core/angle.js'
 import { JOINT_NAMES, POSITION_NAMES, positionsFor, sideLabel } from '../core/labels.js'
 import { SessionRecorder }   from '../core/session.js'
-import { saveSession, getActivePatientId, getPatient, enqueueImageUpload } from '../core/storage.js'
+import { saveSession, getActivePatientId, getPatient, enqueueImageUpload,
+         loadMeasureSelection, saveMeasureSelection } from '../core/storage.js'
+import { restoreSelection }  from '../core/selection.js'
 import { CalibrationManager } from '../core/calibration.js'
 import { isConfigured }      from '../core/supabase.js'
 import { normalizeSetInRect, ROLES } from '../core/landmarks.js'
@@ -35,13 +37,23 @@ const PLANE_TILT_WARN_DEG  = 25
 const PLANE_TILT_CLEAR_DEG = 20
 
 export class MeasureView {
-  constructor(container, onShowHistory, onShowPatients) {
+  /**
+   * @param {object}   [options]
+   * @param {boolean}  [options.resumeCamera] - start the camera on mount; the
+   *   clinician left with it running and is coming back from History/Patients
+   * @param {Function} [options.onLeave] - called with whether the camera was
+   *   running when the clinician leaves for History or Patients
+   */
+  constructor(container, onShowHistory, onShowPatients, { resumeCamera = false, onLeave = null } = {}) {
     this.container      = container
     this.onShowHistory  = onShowHistory
     this.onShowPatients = onShowPatients
+    this._resumeCamera  = resumeCamera
+    this._onLeave       = onLeave
 
     this.camera      = new Camera()
-    this.detector    = new PoseDetector()
+    // Shared for the life of the app, so the model loads once, not per mount.
+    this.detector    = getPoseDetector()
     this.overlay     = new Overlay()
     // Median rejects single-frame landmark glitches; One Euro then smooths
     // adaptively — calm while the joint is still, responsive while it moves,
@@ -54,13 +66,16 @@ export class MeasureView {
     this._loopActive    = false
     this._lastDetection = 0
     this._rafId         = null
+    // Placeholders: mount() restores the real selection via restoreSelection().
     this._joint         = 'knee'
     this._side          = 'right'
     // NOT defaulted to the first valid position. Auto-selecting one writes a
     // clinical claim nobody made into the patient record — a standing elbow
     // measurement saved as "Seated", the same failure the prone-shoulder fix
     // addressed from the other direction. SessionRecorder.setContext() already
-    // keeps an absent position null; the UI has to actually give it one.
+    // keeps an absent position null; the UI has to actually give it one. The
+    // only non-null position mount() restores is one the clinician tapped for
+    // this patient and joint (see core/selection.js).
     this._position      = null
     this._drawerOpen    = false
 
@@ -73,9 +88,13 @@ export class MeasureView {
     this.container.innerHTML = this._template()
     this._bindElements()
     this._bindEvents()
+    const restored = restoreSelection(loadMeasureSelection(), getPatient(getActivePatientId()))
+    this._joint    = restored.joint
+    this._side     = restored.side
+    this._position = restored.position
+    this._renderSelection()
     // Before anything reads the offset: a zero stored for another patient,
-    // joint or side (this view always mounts on its default joint) must not
-    // be applied to this one.
+    // joint or side must not be applied to this one.
     this._syncCalibrationContext()
     this._updateCalibrationUI()
     this._updatePatientChip()
@@ -87,9 +106,11 @@ export class MeasureView {
         this._updateStorageGauge()
       })
     }
+    if (this._resumeCamera) this._startCamera({ auto: true })
   }
 
   unmount() {
+    this._unmounted = true
     if (this._unsubSync) {
       this._unsubSync()
       this._unsubSync = null
@@ -130,25 +151,26 @@ export class MeasureView {
             <div class="cal-progress-label">Hold still…</div>
           </div>
 
-          <!-- Collapsible selector drawer — peeks as a handle, slides up on tap -->
-          <div id="selector-drawer" class="selector-drawer" style="display:none">
+          <!-- Collapsible selector drawer — peeks as a handle, slides up on tap.
+               Shown before the camera starts, so the clinician can set up
+               while it loads. Active buttons and labels come from
+               _renderSelection() at mount, never from this markup. -->
+          <div id="selector-drawer" class="selector-drawer">
             <div id="selector-handle" class="selector-handle">
               <div class="handle-grip"></div>
-              <!-- Placeholder only; _updateSelectionLabel() overwrites it as
-                   soon as the drawer is shown. Names no position on purpose. -->
-              <span id="handle-label">Right Knee</span>
+              <span id="handle-label"></span>
               <div class="handle-chevron">›</div>
             </div>
             <div class="selector-rows">
               <div class="seg-group" id="seg-joint">
-                <button class="seg-btn active" data-joint="knee">Knee</button>
+                <button class="seg-btn" data-joint="knee">Knee</button>
                 <button class="seg-btn" data-joint="hip">Hip</button>
                 <button class="seg-btn" data-joint="shoulder">Shoulder</button>
                 <button class="seg-btn" data-joint="elbow">Elbow</button>
                 <button class="seg-btn" data-joint="ankle">Ankle</button>
               </div>
               <div class="seg-group" id="seg-side">
-                <button class="seg-btn active" data-side="right">Right</button>
+                <button class="seg-btn" data-side="right">Right</button>
                 <button class="seg-btn" data-side="left">Left</button>
               </div>
               <!-- Rebuilt per joint by _renderPositions() -->
@@ -160,7 +182,7 @@ export class MeasureView {
         <!-- Live angle readout -->
         <div class="angle-panel">
           <div id="angle-display" class="angle-display">--°</div>
-          <div id="angle-label" class="angle-label">Right Knee flexion</div>
+          <div id="angle-label" class="angle-label"></div>
 
           <!-- Calibration status pill -->
           <div id="cal-status" class="cal-status"></div>
@@ -728,11 +750,13 @@ export class MeasureView {
     })
     this._btnHistory.addEventListener('click',     () => {
       if (this.recorder.isActive) this._stopRecording()
+      this._onLeave?.(this.camera.isRunning)
       this._stopCamera()
       this.onShowHistory()
     })
     this._patientChip.addEventListener('click', () => {
       if (this.recorder.isActive) this._stopRecording()
+      this._onLeave?.(this.camera.isRunning)
       this._stopCamera()
       this.onShowPatients()
     })
@@ -761,33 +785,44 @@ export class MeasureView {
 
   // ─── Camera lifecycle ────────────────────────────────────────────────
 
-  async _startCamera() {
+  /**
+   * @param {object}  [opts]
+   * @param {boolean} [opts.auto] - started by mount() rather than a tap. iOS
+   *   may refuse getUserMedia without a gesture; then the view quietly stays
+   *   at "Tap to start" instead of showing an error for a start the clinician
+   *   never asked for.
+   */
+  async _startCamera({ auto = false } = {}) {
     this._btnStart.disabled = true
     this._hideError()
     this._setStatus('idle', 'Starting…')
 
     try {
       const { width, height } = await this.camera.start()
+      // Left mid-start (the patient chip is live while the camera starts, and
+      // an auto-start begins with no tap at all): don't leave the camera on
+      // behind a view that is gone.
+      if (this._unmounted) { this.camera.stop(); return }
       this.overlay.resize(width, height)
 
-      this._setStatus('idle', 'Loading AI model…')
+      // Usually already loaded: main.js warms the shared detector at login.
+      if (!this.detector.isReady) this._setStatus('idle', 'Loading AI model…')
       await this.detector.init()
+      if (this._unmounted) { this.camera.stop(); return }
 
       this._btnStart.style.display          = 'none'
       this._btnStop.style.display           = 'block'
       this._activeControls.style.display    = 'flex'
-      this._selectorDrawer.style.display    = 'block'
-      this._renderPositions(this._joint)
-      // Must follow _renderPositions: until this runs the handle still shows
-      // the static placeholder from the template, which named a position
-      // ("Prone") that _position does not hold. That is the same false claim
-      // the auto-select fix exists to remove, just rendered instead of saved.
-      this._updateSelectionLabel()
       this._setStatus('running', 'Detecting pose…')
       this._startLoop()
     } catch (err) {
-      this._showError(err.message)
-      this._setStatus('error', 'Error')
+      if (auto) {
+        this.camera.stop()
+        this._setStatus('idle', 'Tap to start')
+      } else {
+        this._showError(err.message)
+        this._setStatus('error', 'Error')
+      }
       this._btnStart.disabled = false
     }
   }
@@ -807,7 +842,6 @@ export class MeasureView {
     this._btnStart.disabled               = false
     this._activeControls.style.display    = 'none'
     this._closeDrawer()
-    this._selectorDrawer.style.display    = 'none'
     this._romBar.style.display          = 'none'
     this._calProgress.style.display     = 'none'
     this._angleDisplay.className        = 'angle-display'
@@ -1431,7 +1465,7 @@ export class MeasureView {
     // as "seated". Both write a position the clinician never chose, and the
     // record cannot tell that apart from one they did.
     this._renderPositions(joint)
-    this._selectPosition(null)
+    this._selectPosition(null)   // also saves the selection
     this._updateSelectionLabel()
     this._syncCalibrationContext()
     this._updateCalibrationUI()
@@ -1443,6 +1477,8 @@ export class MeasureView {
     this._segSide.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.side === side)
     })
+    // The position stays: same test, other limb. It was tapped for this joint.
+    this._saveSelection()
     this._updateSelectionLabel()
     this._syncCalibrationContext()
     this._updateCalibrationUI()
@@ -1463,6 +1499,33 @@ export class MeasureView {
     this._segPosition.querySelectorAll('.seg-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.position === position)
     })
+    this._saveSelection()
+    this._updateSelectionLabel()
+  }
+
+  /** Remember the selection so the next mount reopens on it (for this
+   *  patient only — see core/selection.js for what may carry over). */
+  _saveSelection() {
+    saveMeasureSelection({
+      patientId: getActivePatientId(),
+      joint:     this._joint,
+      side:      this._side,
+      position:  this._position,
+    })
+  }
+
+  /** Paint the whole selection — buttons, position row, labels, detector —
+   *  from state. Used at mount, where the template carries no selection. */
+  _renderSelection() {
+    this.detector.setJoint(this._joint)
+    this.detector.setSide(this._side)
+    this._segJoint.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.joint === this._joint)
+    })
+    this._segSide.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.side === this._side)
+    })
+    this._renderPositions(this._joint)
     this._updateSelectionLabel()
   }
 
