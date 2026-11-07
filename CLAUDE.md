@@ -27,7 +27,7 @@ npm run check:schema # does the live Supabase `sessions` table have every column
 
 ### Views (`src/main.js`)
 
-No router: views are classes with `mount()`/`unmount()` that replace `#app`; `unmount()` stops the camera.
+No router: views are classes with `mount()`/`unmount()` that replace `#app`; `unmount()` stops the camera. If it was running when the clinician left Measure for History or Patients, `main.js` (`resumeCamera`) has the next MeasureView restart it without a tap. Login, sign-out and boot never auto-start it, and a refused auto-start (iOS gesture rules) falls back quietly to "Tap to start".
 
 ```
 (if Supabase configured) Login → Patients → Measure → History → SessionDetail
@@ -99,7 +99,7 @@ The remaining error is **landmark placement**, concentrated in the proximal poin
 
 **Never present Set Zero as the cure for a floored joint**, in the UI or exports (`provenance.test.js` pins this). Fixing either limitation needs goniometer readings at both ends and probably a two-point span calibration. When it happens, bump `CALIBRATION_VERSION` and the `angleConvention` stamp.
 
-**Calibration versioning.** `CalibrationManager` stores `calibration_version` (currently 3) and discards a stale offset once on upgrade, prompting a re-zero. Bump it for any change that rescales the raw angle: v2 = per-joint convention, v3 = 3D→2D. `isCalibrated` uses an explicit `calibration_captured` flag, because an offset of exactly 0.0 is a legitimate capture. An offset is stored with the `calibration_context` (patient, joint, side) it was captured on, and `setContext()` drops one that doesn't match. MeasureView calls it on mount and on every joint/side change, because it remounts on its default joint: a left hip's zero was once applied to the right knee after a trip to History. Every reset path spreads `CLEARED_CALIBRATION` (`storage.js`). Clearing the offset but not the flag once saved raw sessions as `calibrated: true`, which suppressed the floor caveat.
+**Calibration versioning.** `CalibrationManager` stores `calibration_version` (currently 3) and discards a stale offset once on upgrade, prompting a re-zero. Bump it for any change that rescales the raw angle: v2 = per-joint convention, v3 = 3D→2D. `isCalibrated` uses an explicit `calibration_captured` flag, because an offset of exactly 0.0 is a legitimate capture. An offset is stored with the `calibration_context` (patient, joint, side) it was captured on, and `setContext()` drops one that doesn't match. MeasureView calls it on mount and on every joint/side change. Before this, a remount on the default joint applied a left hip's zero to the right knee after a trip to History. Every reset path spreads `CLEARED_CALIBRATION` (`storage.js`). Clearing the offset but not the flag once saved raw sessions as `calibrated: true`, which suppressed the floor caveat.
 
 ### Frames: one buffer per tick, stored clean and cropped
 
@@ -136,6 +136,8 @@ The remaining error is **landmark placement**, concentrated in the proximal poin
 
 The selector drawer picks joint, side and position, handed to `SessionRecorder.setContext()` and `setCalibration()` before `start()`. The position row renders from `JOINT_POSITIONS`. **No position is selected until the clinician taps one** (`_position` stays `null`). Both previous designs, a hidden default and auto-selecting the first entry, filed clinical claims nobody made. History/SessionDetail omit the badge for null, and the drawer reads "position not set". Switching joint, side or patient clears the calibration offset.
 
+**The selection carries over** across remounts (`restoreSelection()`, `src/core/selection.js`; stored as `measure_selection`). Joint and side carry over for the same patient only. With nothing to restore, the view opens on knee and the patient's `affectedSide` (else right). The position carries over only with the joint it was tapped for: a joint change nulls it, a side change keeps it (same test, other limb), and the restore re-checks it against `positionsFor()`. So a non-null position is always one the clinician tapped for this patient and joint. The template carries no selection; `_renderSelection()` paints it at mount, and the drawer shows before the camera starts.
+
 ### Accounts & cloud sync
 
 Optional, gated by `isConfigured()`.
@@ -157,7 +159,7 @@ Two device-only failures are handled:
 
 ### Persistence (`src/core/storage.js`)
 
-The only localStorage module; local-first, with every mutation also enqueuing an outbox op. Keys: `rom_sessions`, `rom_settings` (calibration, active patient, `export_include_initials` — whose only UI is the export sheet), `rom_patients`, `rom_outbox`. `migrateInlineImages()` moves pre-IndexedDB inline `peakFrame`/`minFrame` data URLs into `imageStore` on boot.
+The only localStorage module; local-first, with every mutation also enqueuing an outbox op. Keys: `rom_sessions`, `rom_settings` (calibration, active patient, `measure_selection`, `export_include_initials` — whose only UI is the export sheet), `rom_patients`, `rom_outbox`. `migrateInlineImages()` moves pre-IndexedDB inline `peakFrame`/`minFrame` data URLs into `imageStore` on boot.
 
 **Session fields.** `joint`, `side`, `position` (null = not chosen). Pre-split sessions have `joint: 'knee_right'` and no `side`, and the UI handles both shapes. Stamp a new value on the relevant field for **any** change that alters measured numbers. **Absence is always a distinct third state — never collapse it to a default.**
 
@@ -198,7 +200,7 @@ Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfi
 
 ### MediaPipe loading (`src/detection/pose.js`)
 
-`PoseDetector.init()` loads BlazePose Full (~7MB) from Google's CDN and the WASM from jsDelivr. The production service worker caches both (`mediapipe-models`/`mediapipe-wasm`, CacheFirst, 90 days). Landmark indices use MediaPipe's subject-anatomical left/right.
+`PoseDetector.init()` loads BlazePose Full (~7MB) from Google's CDN and the WASM from jsDelivr. There is **one detector for the app** (`getPoseDetector()`), warmed by `enterApp()` right after login. A detector per MeasureView once rebuilt the landmarker and a GPU context on every return from History and never closed the old one. Its joint/side are shared state, so set them on every mount. `init()` deduplicates but doesn't cache a failure, or one offline launch would break Start Camera until a reload. The production service worker caches both (`mediapipe-models`/`mediapipe-wasm`, CacheFirst, 90 days). Landmark indices use MediaPipe's subject-anatomical left/right.
 
 ## Testing
 
@@ -216,7 +218,8 @@ Unit-test notes:
 E2E and scripts (camera-free ones seed `rom_sessions`, plus IndexedDB blobs where frames matter):
 - `scripts/e2e/verify.mjs` checks no inline image bytes, two IndexedDB blobs, `calibrated: false` (never taps Set Zero), landmark stamps, fractions within 0..1 with a `kind` per point, unfiltered frame angles, and **stored frame aspect = camera stack, not the video stream** (the only proof the crop reaches the snapshot).
 - `verify-landmark-verification.mjs` covers the whole verify → save → revert loop at the real UI, asserting the raw record is untouched.
-- `verify-calibration-scope.mjs` drives Set Zero across a History round trip (dropped for another joint, kept for the same one) and a patient switch (the next session saves `calibrated: false`).
+- `verify-calibration-scope.mjs` drives Set Zero across a History round trip (kept for the same joint, dropped when the view reopens on another) and a patient switch (the next session saves `calibrated: false`).
+- `verify-measure-warm-start.mjs` checks one model fetch per run, warm-up before any tap, camera resume (and no resume when it was stopped), and selection carry-over per patient. Chromium grants `getUserMedia` without a gesture, so iOS resume still needs a device.
 - `verify-floor-caveat.mjs` covers the History badge, chip, note and PDF. `verify-floor-pdf-render.mjs` renders to PNG; the viewport must be taller than the page or the capture is half transparent.
 - PDF bytes, driven end-to-end: check the `%PDF-` header, page count, image objects and **zero `(\376\377` UTF-16 markers**. Headless Chromium downloads PDFs rather than displaying them.
 - `measure-silhouette-axis.mjs` is the only tool that judges the app independently of MediaPipe (reproduces 10.4° with `--seg1 396,448,820,845 --seg2 400,448,866,896`). **Always pass `--out` and look at the samples.** A low residual can sit on the wrong structure (a door frame, 78° off), and overlapping segments need separate x windows. `measure-overlay-dots.mjs` only reads what the landmarks describe.
