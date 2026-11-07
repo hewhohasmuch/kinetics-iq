@@ -23,6 +23,7 @@ import { HistoryView }       from './ui/HistoryView.js'
 import { SessionDetailView } from './ui/SessionDetailView.js'
 import { LoginView }         from './ui/LoginView.js'
 import { PatientsView }      from './ui/PatientsView.js'
+import { getPoseDetector }   from './detection/pose.js'
 import { isConfigured, getSession, onAuthChange } from './core/supabase.js'
 import { initSync }          from './core/sync.js'
 import { parseAuthRedirect, readRecoveryTokens, beginRecovery, isRecoveryPending, endRecovery,
@@ -32,11 +33,18 @@ import { loadPatients, clearAllLocalData, migrateInlineImages, loadSettings } fr
 const app = document.getElementById('app')
 let currentView = null
 
+// Whether the camera was running when the clinician left Measure for History
+// or Patients. Coming back restarts it, so a trip to check a previous session
+// doesn't cost a Start Camera tap. Only those in-app trips set it; login,
+// sign-out and boot never auto-start the camera.
+let resumeCamera = false
+
 function unmountCurrent() {
   if (currentView) currentView.unmount()
 }
 
 function showLogin(options) {
+  resumeCamera = false
   unmountCurrent()
   currentView = new LoginView(app, enterApp, options)
   currentView.mount()
@@ -50,7 +58,12 @@ function showPatients() {
 
 function showMeasure() {
   unmountCurrent()
-  currentView = new MeasureView(app, showHistory, showPatients)
+  const resume = resumeCamera
+  resumeCamera = false
+  currentView = new MeasureView(app, showHistory, showPatients, {
+    resumeCamera: resume,
+    onLeave: (cameraWasRunning) => { resumeCamera = cameraWasRunning },
+  })
   currentView.mount()
 }
 
@@ -68,6 +81,10 @@ function showDetail(session) {
 
 function enterApp() {
   if (isConfigured()) initSync()
+  // Load the pose model now, in the background, so Measure finds it ready.
+  // Needs no user gesture (fetch + WASM + WebGL). A failure is not cached;
+  // Start Camera retries and reports it.
+  getPoseDetector().init().catch(() => {})
   // One-time rescue: convert any pre-IndexedDB inline snapshot data URLs to
   // blobs + queue their upload, freeing localStorage. Fire-and-forget — its
   // outbox enqueues trigger a sync via the outbox listener initSync installed.

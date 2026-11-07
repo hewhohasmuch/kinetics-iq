@@ -23,6 +23,20 @@ export const MODEL_VERSION = 'tasks-vision@0.10.35+float16/latest'
 // because this remains the natural place to look for it.
 export { JOINT_CONFIG }
 
+let shared = null
+
+/**
+ * The app's one PoseDetector. MeasureView is rebuilt on every navigation, and
+ * a detector per instance re-created the landmarker (WASM, a ~7MB model, a GPU
+ * context) on each return from History or Patients, without ever closing the
+ * old one. main.js warms this right after login, so Measure usually finds the
+ * model ready. Its joint/side are shared state: set them on every mount.
+ */
+export function getPoseDetector() {
+  if (!shared) shared = new PoseDetector()
+  return shared
+}
+
 export class PoseDetector {
   constructor() {
     this._landmarker  = null
@@ -33,6 +47,9 @@ export class PoseDetector {
   }
 
   // Load MediaPipe WASM and model. Safe to call multiple times — deduplicates.
+  // A FAILED load is not cached: the shared detector lives for the whole app,
+  // so a remembered rejection (offline on first launch, a CDN blip) would
+  // leave every later Start Camera failing until a reload.
   init() {
     if (this._initPromise) return this._initPromise
     this._initPromise = (async () => {
@@ -47,6 +64,7 @@ export class PoseDetector {
       })
       this._ready = true
     })()
+    this._initPromise.catch(() => { this._initPromise = null })
     return this._initPromise
   }
 

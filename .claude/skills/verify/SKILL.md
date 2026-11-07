@@ -33,7 +33,8 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 - Key ids: `#btn-start-camera`, `#angle-display` (readout, `--°` until pose found), `#btn-calibrate` (Set Zero, ~2s sampling), `#btn-record-start/stop`, `#btn-notes-skip`, `#btn-history`, `.session-row`, `#btn-signout`, `#btn-new-patient`, `#pf-name`, `.form-save`, login: `#login-email/password/submit`. The selector drawer is `#selector-drawer` / `#selector-handle` with `.seg-btn[data-joint|data-side|data-position]` inside it, and the off-axis caution is `#plane-warning`.
 - `#btn-history` sits in the controls row, which is **hidden until the camera starts** — Playwright's `click()` waits for visibility and times out. When skipping the camera, wait for `state: 'attached'` and click it through `page.evaluate(() => document.getElementById('btn-history').click())`.
 - Model + first detection takes 30–90s headless; wait on `#angle-display` matching `/^-?\d+°$/` with a generous timeout. The `-?` is required — once Set Zero has been tapped, anything past the zero point in the extension direction renders negative.
-- A seeded `calibration_offset` only survives mount with `calibration_captured: true` **and** a `calibration_context` `{patientId, joint, side}` matching the active patient and the view's joint/side (Right Knee on mount). Anything else is dropped as another limb's zero. `scripts/verify-calibration-scope.mjs` drives this.
+- A seeded `calibration_offset` only survives mount with `calibration_captured: true` **and** a `calibration_context` `{patientId, joint, side}` matching the active patient and the view's joint/side. The view opens on the seeded `measure_selection` when its `patientId` matches, else on knee plus the patient's `affectedSide` (else right). Anything else is dropped as another limb's zero. `scripts/verify-calibration-scope.mjs` drives this.
+- MeasureView reopens with the camera running if it was running when you left for History or Patients, so after a round trip wait on `#angle-display`, not `#btn-start-camera`. Stop the camera first for a cold return. `scripts/verify-measure-warm-start.mjs` covers resume, selection carry-over and the one-model-fetch rule.
 - `#btn-calibrate` sampling ends on its own after 20 detection frames, which headless (~2Hz) stretches to ~10–20s. Wait for its label to return to `Set Zero` rather than a fixed timeout, then read `#cal-status`.
 - SessionDetail's Chart.js has a 400ms entry animation — screenshot too early and the timeline line renders near zero; wait ~1s after the view mounts.
 - The overlay angle label is canvas-drawn; assert it by screenshotting and reading the image, not via DOM. Note it is drawn at *view time* from the saved record now, not burned in at capture — so a frame with no overlay means the landmark set never reached the session, not that the capture failed.
@@ -44,19 +45,18 @@ The caution sits at the bottom of the camera stack, where the selector drawer al
 it is a layout question — and layout is the part `src/ui/` has no unit tests for.
 
 - **Skip the camera.** `segmentTilt()` will not reliably clear 25° on a fake-camera pose, so
-  reveal both elements directly: the drawer is `display:none` until the camera starts, so set
-  `#selector-drawer`'s display back and `#plane-warning`'s to `block`. Then open the drawer by
+  set `#plane-warning`'s display to `block` (the drawer is already shown at mount, camera or
+  not). Then open the drawer by
   clicking `#selector-handle` for real — the offset that lifts the caution above it is
   computed in `_openDrawer()`, so an evaluate-only shortcut would skip the code under test.
 - **Wait out the 280ms transition** after any open, close or joint change (~450ms is enough).
   Both elements animate, and a bounding box read sooner measures a position neither will
   hold: a check made 120ms after a joint change reported 3.5px of clearance where the settled
   answer is 12px. It passed the assertion, but the number was fiction.
-- **Forcing the drawer visible is not the same as starting the camera.** `_startCamera()`
-  also calls `_renderPositions()`, so the real drawer always carries a position row; a drive
-  that only sets `display` gets a drawer 24px shorter (111px against 135px at a 393px width)
-  and the row appears on the first joint tap. Read a height in that state and you have
-  measured your own harness. Selecting a joint does *not* change the height in the app — a
+- The drawer carries its position row from mount (`_renderSelection()`), so its height
+  without the camera is the real one (135px at a 393px width). Before the drawer showed at
+  mount, a drive that forced it visible got a 111px drawer with no position row and measured
+  its own harness. Selecting a joint does *not* change the height in the app — a
   position row is one flex row at two entries or three — so the re-measure in
   `_renderPositions()` is a guard against a wrapped row or larger platform text, and a drive
   at one viewport will not exercise it.

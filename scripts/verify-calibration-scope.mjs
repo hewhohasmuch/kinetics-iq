@@ -4,9 +4,11 @@
  *
  * Two bugs this pins, both in the MeasureView wiring that src/ui/ has no unit
  * tests for:
- *   1. MeasureView remounts on its default joint (Right Knee) after any trip to
- *      History or Patients, but used to keep the stored offset — so a left hip's
- *      zero was applied to the right knee, and the session stamped calibrated.
+ *   1. MeasureView used to remount on Right Knee after any trip to History or
+ *      Patients but keep the stored offset — so a left hip's zero was applied
+ *      to the right knee, and the session stamped calibrated. The view now
+ *      reopens on its saved selection, so the drive seeds a selection that
+ *      disagrees with the stored zero to reach the same mismatch.
  *   2. Switching patient reset the offset to 0 but left it flagged captured, so
  *      the next session read "Zeroed at 0.0°" and saved calibrated: true for a
  *      raw reading (which suppresses the extension-floor caveat on export).
@@ -83,13 +85,6 @@ async function setZero(page) {
   )
 }
 
-async function historyRoundTrip(page) {
-  await page.click('#btn-history')
-  await page.waitForSelector('.history-view')
-  await page.click('#btn-back')
-  await page.waitForSelector('#btn-start-camera')
-}
-
 async function main() {
   const y4m = await ensureFixture()
 
@@ -127,31 +122,42 @@ async function main() {
     await page.goto(URL, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('#btn-start-camera', { timeout: 30_000 })
 
-    console.log('\n1. Zero on Left Hip, then History → back (view remounts on Right Knee)')
+    console.log('\n1. Zero on Left Hip, then History → back (reopens on Left Hip)')
     await startCamera(page)
     await select(page, 'joint', 'hip')
     await select(page, 'side', 'left')
     await setZero(page)
-    info(`after Set Zero: ${await calStatus(page)}`)
-    if ((await calStatus(page)).startsWith('Zeroed at')) pass('left hip zeroed')
+    const zeroed = await calStatus(page)
+    info(`after Set Zero: ${zeroed}`)
+    if (zeroed.startsWith('Zeroed at')) pass('left hip zeroed')
     else fail('Set Zero did not capture an offset')
     if ((await settings(page)).calibration_context?.joint === 'hip') pass('offset stored with its context')
     else fail(`stored context: ${JSON.stringify((await settings(page)).calibration_context)}`)
 
-    await historyRoundTrip(page)
+    await page.click('#btn-history')
+    await page.waitForSelector('.history-view')
+    await page.click('#btn-back')
+    await page.waitForSelector('#angle-display')
     info(`after remount: ${await page.textContent('#angle-label')} — ${await calStatus(page)}`)
-    if ((await calStatus(page)).startsWith('Not zeroed')) pass('hip zero NOT applied to the right knee')
-    else fail(`hip zero leaked onto the default joint: "${await calStatus(page)}"`)
-    if ((await settings(page)).calibration_captured === false) pass('stored offset cleared')
-    else fail('stored offset still flagged captured')
-
-    console.log('\n2. Zero on Right Knee, then History → back (same joint and side)')
-    await startCamera(page)
-    await setZero(page)
-    const zeroed = await calStatus(page)
-    await historyRoundTrip(page)
     if ((await calStatus(page)) === zeroed) pass(`same-joint zero survives the round trip (${zeroed})`)
     else fail(`same-joint zero lost: "${zeroed}" became "${await calStatus(page)}"`)
+
+    console.log('\n2. Reopen on Right Knee with the left hip zero still stored')
+    await page.click('#btn-stop-camera')
+    await page.evaluate(() => document.getElementById('btn-history').click())
+    await page.waitForSelector('.history-view')
+    await page.evaluate((pid) => {
+      const s = JSON.parse(localStorage.getItem('rom_settings'))
+      s.measure_selection = { patientId: pid, joint: 'knee', side: 'right', position: null }
+      localStorage.setItem('rom_settings', JSON.stringify(s))
+    }, P1.id)
+    await page.click('#btn-back')
+    await page.waitForSelector('#btn-start-camera')
+    info(`after remount: ${await page.textContent('#angle-label')} — ${await calStatus(page)}`)
+    if ((await calStatus(page)).startsWith('Not zeroed')) pass('hip zero NOT applied to the right knee')
+    else fail(`hip zero leaked onto the right knee: "${await calStatus(page)}"`)
+    if ((await settings(page)).calibration_captured === false) pass('stored offset cleared')
+    else fail('stored offset still flagged captured')
 
     console.log('\n3. Switch patient → next session is recorded raw')
     await page.click('#patient-chip')
