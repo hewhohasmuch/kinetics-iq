@@ -136,6 +136,8 @@ The remaining error is **landmark placement**, concentrated in the proximal poin
 
 The selector drawer picks joint, side and position, handed to `SessionRecorder.setContext()` and `setCalibration()` before `start()`. The position row renders from `JOINT_POSITIONS`. **No position is selected until the clinician taps one** (`_position` stays `null`). Both previous designs, a hidden default and auto-selecting the first entry, filed clinical claims nobody made. History/SessionDetail omit the badge for null, and the drawer reads "position not set". Switching joint, side or patient clears the calibration offset.
 
+**No exit discards a take.** History, the patient chip and the next Record each call `_flushPendingSession()` first. It stops a running take and saves one waiting in the note box with whatever note was typed, then waits for every save in flight (`_saving`) to store its snapshots, so a chip tap files the take under the patient being measured. Stop Camera mid-take opens the note box rather than dropping the recorder. All of these once lost the measurement: the view navigated away with the session held only in its own state.
+
 **The selection carries over** across remounts (`restoreSelection()`, `src/core/selection.js`; stored as `measure_selection`). Joint and side carry over for the same patient only. With nothing to restore, the view opens on knee and the patient's `affectedSide` (else right). The position carries over only with the joint it was tapped for: a joint change nulls it, a side change keeps it (same test, other limb), and the restore re-checks it against `positionsFor()`. So a non-null position is always one the clinician tapped for this patient and joint. The template carries no selection; `_renderSelection()` paints it at mount, and the drawer shows before the camera starts.
 
 ### Accounts & cloud sync
@@ -174,7 +176,7 @@ The only localStorage module; local-first, with every mutation also enqueuing an
 | `landmarksRaw` | `{peak, min}`, **immutable** | either end may be null (landmark below visibility) |
 | `verifications` | array (≤1 today) | null/`[]` = never verified |
 
-Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfiltered* angle at each extreme frame); `frameTiltMax`/`frameTiltMin` (per-frame tilt, not recomputable after a drag); `peakFramePath`/`minFramePath`. Calibration is stamped by `SessionRecorder.setCalibration()` at start, which is safe because `_btnCalibrate` is disabled while recording. `captured` is passed explicitly.
+Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfiltered* angle at each extreme frame); `frameTiltMax`/`frameTiltMin` (per-frame tilt, not recomputable after a drag); `peakFramePath`/`minFramePath`. Calibration is stamped by `SessionRecorder.setCalibration()` at start, which is safe because `_btnCalibrate` is disabled while recording, and also while Record waits for the previous take to save. `captured` is passed explicitly.
 
 **Surfacing provenance (`src/core/provenance.js`).** `sessionProvenance()` returns the worst of three mutually exclusive verdicts: `convention`, then `depth` (`angleMode === '3d'` only), then `filter`. `calibrationSummary()` does the same for calibration. History and SessionDetail show an amber badge; legacy points are *marked* on the trend chart, not dropped. Consumers branch on `level !== 'ok'` and read `label`/`reason`. A new verdict needs a new case only in `report.js`'s `warningTail()`.
 
@@ -200,7 +202,7 @@ Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfi
 
 ### MediaPipe loading (`src/detection/pose.js`)
 
-`PoseDetector.init()` loads BlazePose Full (~7MB) from Google's CDN and the WASM from jsDelivr. There is **one detector for the app** (`getPoseDetector()`), warmed by `enterApp()` right after login. A detector per MeasureView once rebuilt the landmarker and a GPU context on every return from History and never closed the old one. Its joint/side are shared state, so set them on every mount. `init()` deduplicates but doesn't cache a failure, or one offline launch would break Start Camera until a reload. The production service worker caches both (`mediapipe-models`/`mediapipe-wasm`, CacheFirst, 90 days). Landmark indices use MediaPipe's subject-anatomical left/right.
+`PoseDetector.init()` loads BlazePose Full (~7MB) from Google's CDN and the WASM from jsDelivr. There is **one detector for the app** (`getPoseDetector()`), warmed by `enterApp()` right after login (at boot in local-only mode). A detector per MeasureView once rebuilt the landmarker and a GPU context on every return from History and never closed the old one. Its joint/side are shared state, so set them on every mount. `init()` deduplicates but doesn't cache a failure, or one offline launch would break Start Camera until a reload. The production service worker caches both (`mediapipe-models`/`mediapipe-wasm`, CacheFirst, 90 days). Landmark indices use MediaPipe's subject-anatomical left/right.
 
 ## Testing
 
@@ -219,6 +221,7 @@ E2E and scripts (camera-free ones seed `rom_sessions`, plus IndexedDB blobs wher
 - `scripts/e2e/verify.mjs` checks no inline image bytes, two IndexedDB blobs, `calibrated: false` (never taps Set Zero), landmark stamps, fractions within 0..1 with a `kind` per point, unfiltered frame angles, and **stored frame aspect = camera stack, not the video stream** (the only proof the crop reaches the snapshot).
 - `verify-landmark-verification.mjs` covers the whole verify → save → revert loop at the real UI, asserting the raw record is untouched.
 - `verify-calibration-scope.mjs` drives Set Zero across a History round trip (kept for the same joint, dropped when the view reopens on another) and a patient switch (the next session saves `calibrated: false`).
+- `verify-recording-not-lost.mjs` takes History, the chip and Stop Camera mid-take, History with the note box open, and Record over an unanswered note box. Each must leave the session, its note and both blobs in storage.
 - `verify-measure-warm-start.mjs` checks one model fetch per run, warm-up before any tap, camera resume (and no resume when it was stopped), and selection carry-over per patient. Chromium grants `getUserMedia` without a gesture, so iOS resume still needs a device.
 - `verify-floor-caveat.mjs` covers the History badge, chip, note and PDF. `verify-floor-pdf-render.mjs` renders to PNG; the viewport must be taller than the page or the capture is half transparent.
 - PDF bytes, driven end-to-end: check the `%PDF-` header, page count, image objects and **zero `(\376\377` UTF-16 markers**. Headless Chromium downloads PDFs rather than displaying them.

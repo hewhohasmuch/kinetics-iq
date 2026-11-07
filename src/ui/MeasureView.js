@@ -739,7 +739,12 @@ export class MeasureView {
 
   _bindEvents() {
     this._btnStart.addEventListener('click',       () => this._startCamera())
-    this._btnStop.addEventListener('click',        () => this._stopCamera())
+    this._btnStop.addEventListener('click',        () => {
+      // A take in progress goes to the note box, as Stop & Save would.
+      // _stopCamera() on its own drops the recorder, and the take with it.
+      if (this.recorder.isActive) this._stopRecording()
+      this._stopCamera()
+    })
     this._btnCalibrate.addEventListener('click',   () => this._handleCalibrateBtn())
     this._btnRecordStart.addEventListener('click', () => this._startRecording())
     this._btnRecordStop.addEventListener('click',  () => this._stopRecording())
@@ -748,18 +753,23 @@ export class MeasureView {
     this._notesInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this._saveWithNote()
     })
-    this._btnHistory.addEventListener('click',     () => {
-      if (this.recorder.isActive) this._stopRecording()
-      this._onLeave?.(this.camera.isRunning)
+    // Leaving saves the take first. This used to stop the recording, open the
+    // note box for it and then navigate, so the session lived only in the
+    // discarded view and was never saved — the same for a take whose note box
+    // was still open. The save is awaited so its snapshots are in IndexedDB,
+    // and it is filed under the patient being measured, before the chip's
+    // roster can change who that is.
+    const leave = async (go) => {
+      if (this._leaving) return            // a second tap while the save runs
+      this._leaving = true
+      const cameraWasRunning = this.camera.isRunning
+      await this._flushPendingSession()
+      this._onLeave?.(cameraWasRunning)
       this._stopCamera()
-      this.onShowHistory()
-    })
-    this._patientChip.addEventListener('click', () => {
-      if (this.recorder.isActive) this._stopRecording()
-      this._onLeave?.(this.camera.isRunning)
-      this._stopCamera()
-      this.onShowPatients()
-    })
+      go()
+    }
+    this._btnHistory.addEventListener('click',  () => leave(this.onShowHistory))
+    this._patientChip.addEventListener('click', () => leave(this.onShowPatients))
 
     document.getElementById('selector-handle').addEventListener('click', () => this._toggleDrawer())
 
@@ -904,12 +914,27 @@ export class MeasureView {
 
   // ─── Recording lifecycle ─────────────────────────────────────────────
 
-  _startRecording() {
+  async _startRecording() {
     // Recording is blocked (not just saving) so a finished measurement can
     // never be lost navigating away to pick a patient afterwards.
     if (!getActivePatientId()) {
       this._showError('Select a patient before recording — tap the patient chip at the top right.')
       return
+    }
+    // The previous take may still be waiting in the note box, or mid-save.
+    // A new take reuses the snapshot canvases and _pendingSession, so it would
+    // overwrite that one; and a save still finishing resets the frame flags
+    // the new take is about to set. Save it first, with any typed note.
+    if (this._pendingSession || this._saving) {
+      // Set Zero is locked too: a tap during this wait would start sampling,
+      // and the take would then start with the offset moving under it — the
+      // offset is stamped below on the promise that it cannot change.
+      this._btnRecordStart.disabled = true
+      this._btnCalibrate.disabled   = true
+      await this._flushPendingSession()
+      this._btnRecordStart.disabled = false
+      this._btnCalibrate.disabled   = false
+      if (this._unmounted) return
     }
     this._hideError()
     this.recorder.setContext(this._joint, this._side, this._position)
@@ -966,7 +991,31 @@ export class MeasureView {
     this._notesInput.blur()
   }
 
-  async _saveWithNote(forceNote) {
+  /**
+   * Save whatever take the view is holding, before anything that would
+   * discard it: leaving for History or Patients, or starting the next take.
+   * A take still recording is stopped; one waiting in the note box is saved
+   * with whatever note has been typed (empty if none). A navigation tap is not
+   * a decision to throw a measurement away. Resolves once every save in
+   * flight, including one the Save button started, has stored its snapshots.
+   */
+  async _flushPendingSession() {
+    if (this.recorder.isActive) this._stopRecording()
+    if (this._pendingSession) this._saveWithNote()
+    // A failed save has already reported itself (_showError); it must not
+    // strand the caller, or a leave would hang with _leaving set.
+    while (this._saving) await this._saving.catch(() => {})
+  }
+
+  /** Save the held take. Tracked in `_saving` so _flushPendingSession() can wait for it. */
+  _saveWithNote(forceNote) {
+    const saving = this._commitPendingSession(forceNote)
+      .finally(() => { if (this._saving === saving) this._saving = null })
+    this._saving = saving
+    return saving
+  }
+
+  async _commitPendingSession(forceNote) {
     const note    = forceNote !== undefined ? forceNote : this._notesInput.value
     const session = SessionRecorder.attachNotes(this._pendingSession, note)
     this._pendingSession = null

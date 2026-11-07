@@ -76,6 +76,15 @@ Landmark **verification** — the editor, the drag, and what persists — is not
 covered here. It has its own harness:
 `node scripts/verify-landmark-verification.mjs`.
 
+Three more harnesses reuse this fixture (`ensureFixture()` from `fixture.mjs`),
+each on its own port so it can run beside this one:
+
+- `scripts/verify-calibration-scope.mjs`: Set Zero is kept for the same joint
+  and dropped for another joint or patient.
+- `scripts/verify-measure-warm-start.mjs`: one model fetch per run, camera
+  resume after History/Patients, selection carry-over.
+- `scripts/verify-recording-not-lost.mjs`: no exit from Measure discards a take.
+
 ## Known environment limits
 
 - Headless Chromium runs BlazePose on **CPU**, landing around 2Hz rather than
