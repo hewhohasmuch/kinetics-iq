@@ -46,8 +46,12 @@ const check = (name, cond, detail = '') => {
   if (!cond) fails.push(name)
 }
 
-const server = spawn('npx', ['vite', '--port', String(PORT), '--strictPort'],
-  { cwd: process.cwd(), shell: true, stdio: 'pipe' })
+// Vite's own entry run with node, not `npx` through a shell: on Windows kill()
+// then ends only the shell, and the orphaned server keeps the port for the
+// next run (same fix as verify-password-reset.mjs).
+const server = spawn(process.execPath,
+  ['node_modules/vite/bin/vite.js', '--port', String(PORT), '--strictPort'],
+  { cwd: process.cwd(), stdio: 'pipe' })
 server.stdout.on('data', () => {}); server.stderr.on('data', () => {})
 
 function waitForServer(url, timeoutMs = 60000) {

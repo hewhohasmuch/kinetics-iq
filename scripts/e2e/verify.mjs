@@ -71,11 +71,13 @@ async function main() {
   let server = null
   if (!OWN_URL) {
     console.log('\nStarting dev server')
-    server = spawn('npx', ['vite', '--port', String(PORT), '--strictPort'], {
-      cwd: join(HERE, '..', '..'),
-      shell: true,
-      stdio: 'ignore',
-    })
+    // Vite's own entry run with node, not `npx` through a shell: on Windows
+    // kill() then ends only the shell, and the orphaned server keeps the port
+    // for the next run (same fix as verify-password-reset.mjs).
+    const root = join(HERE, '..', '..')
+    server = spawn(process.execPath,
+      [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(PORT), '--strictPort'],
+      { cwd: root, stdio: 'ignore' })
     await waitForServer(URL)
     info(URL)
   }
