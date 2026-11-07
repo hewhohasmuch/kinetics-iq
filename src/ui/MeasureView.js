@@ -926,9 +926,14 @@ export class MeasureView {
     // overwrite that one; and a save still finishing resets the frame flags
     // the new take is about to set. Save it first, with any typed note.
     if (this._pendingSession || this._saving) {
+      // Set Zero is locked too: a tap during this wait would start sampling,
+      // and the take would then start with the offset moving under it — the
+      // offset is stamped below on the promise that it cannot change.
       this._btnRecordStart.disabled = true
+      this._btnCalibrate.disabled   = true
       await this._flushPendingSession()
       this._btnRecordStart.disabled = false
+      this._btnCalibrate.disabled   = false
       if (this._unmounted) return
     }
     this._hideError()
