@@ -183,4 +183,70 @@ describe('CalibrationManager', () => {
     expect(fresh.isCalibrated).toBe(true)
   })
 
+  // ─── Context scope ───────────────────────────────────────────────────
+  //
+  // MeasureView mounts on its default joint every time, so without a stored
+  // context a left hip's zero was applied to the right knee after a trip to
+  // History, and the session was stamped calibrated with the wrong offset.
+
+  const LEFT_HIP  = { patientId: 'p1', joint: 'hip',  side: 'left' }
+  const RIGHT_KNEE = { patientId: 'p1', joint: 'knee', side: 'right' }
+
+  function storedOffset(context) {
+    loadSettings.mockReturnValueOnce({
+      calibration_offset:   12.5,
+      calibration_version:  CALIBRATION_VERSION,
+      calibration_captured: true,
+      calibration_context:  context,
+    })
+    return new CalibrationManager()
+  }
+
+  it('keeps a stored offset when the context matches', () => {
+    const c = storedOffset(LEFT_HIP)
+    c.setContext({ ...LEFT_HIP })
+    expect(c.isCalibrated).toBe(true)
+    expect(c.apply(20)).toBe(7.5)
+  })
+
+  it.each([
+    ['joint',   RIGHT_KNEE],
+    ['side',    { ...LEFT_HIP, side: 'right' }],
+    ['patient', { ...LEFT_HIP, patientId: 'p2' }],
+  ])('drops a stored offset captured for another %s', (_, other) => {
+    const c = storedOffset(LEFT_HIP)
+    c.setContext(other)
+    expect(c.isCalibrated).toBe(false)
+    expect(c.offset).toBe(0)
+    expect(c.apply(20)).toBe(20)
+  })
+
+  it('drops an offset stored before contexts existed', () => {
+    const c = storedOffset(undefined)
+    c.setContext(RIGHT_KNEE)
+    expect(c.isCalibrated).toBe(false)
+  })
+
+  it('stores the context with a captured offset, and honours it next mount', async () => {
+    const { saveSettings } = await import('./storage.js')
+    saveSettings.mockClear()
+
+    cal.setContext(LEFT_HIP)
+    cal.startSampling(() => {})
+    for (let i = 0; i < 20; i++) cal.addSample(12.5)
+
+    const saved = saveSettings.mock.calls.at(-1)[0]
+    expect(saved).toMatchObject({ calibration_captured: true, calibration_context: LEFT_HIP })
+
+    const next = storedOffset(saved.calibration_context)
+    next.setContext(LEFT_HIP)
+    expect(next.isCalibrated).toBe(true)
+  })
+
+  it('a null patient is a context like any other', () => {
+    const c = storedOffset({ ...RIGHT_KNEE, patientId: null })
+    c.setContext({ ...RIGHT_KNEE, patientId: undefined })
+    expect(c.isCalibrated).toBe(true)
+  })
+
 })

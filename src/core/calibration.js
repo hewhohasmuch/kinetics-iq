@@ -28,6 +28,13 @@
  * It should be re-calibrated at the start of each session if the phone
  * is repositioned or markers are reapplied.
  *
+ * SCOPE: an offset belongs to the patient, joint and side it was captured on,
+ * and is stored with that context. setContext() discards a stored offset whose
+ * context does not match. Without this a remount (which resets the view to its
+ * default joint) applied, say, a left hip's zero to a right knee and stamped
+ * the session calibrated. An offset stored before contexts existed has none,
+ * so it never matches and is discarded once.
+ *
  * SAMPLING:
  * We capture 20 frames (~2 seconds at 10Hz) and average them for the
  * offset — more stable than a single-frame capture.
@@ -67,6 +74,10 @@ export class CalibrationManager {
       this._offset   = settings.calibration_offset ?? 0
       this._captured = settings.calibration_captured ?? false
     }
+    // The context the stored offset was captured in (null = unknown), and the
+    // context readings are being taken in now (null until setContext()).
+    this._capturedContext = settings.calibration_context ?? null
+    this._context         = null
 
     this._sampling      = false
     this._samples       = []
@@ -74,6 +85,21 @@ export class CalibrationManager {
   }
 
   // ─── Public API ──────────────────────────────────────────────────────
+
+  /**
+   * Declare what is being measured. A stored offset captured for a different
+   * patient, joint or side is cleared — a zero taken on one limb says nothing
+   * about another. Call before reading `offset`/`isCalibrated` for a session,
+   * and again whenever the patient, joint or side changes.
+   *
+   * @param {{patientId: string|null, joint: string, side: string}} context
+   */
+  setContext({ patientId, joint, side }) {
+    this._context = { patientId: patientId ?? null, joint, side }
+    if (this._captured && !sameContext(this._capturedContext, this._context)) {
+      this.clear()
+    }
+  }
 
   /**
    * Current calibration offset in degrees.
@@ -166,9 +192,10 @@ export class CalibrationManager {
    * Readings will be raw flexion angles again.
    */
   clear() {
-    this._offset   = 0
-    this._captured = false
-    saveSettings({ calibration_offset: 0, calibration_captured: false })
+    this._offset          = 0
+    this._captured        = false
+    this._capturedContext = null
+    saveSettings({ calibration_offset: 0, calibration_captured: false, calibration_context: null })
   }
 
   // ─── Private ─────────────────────────────────────────────────────────
@@ -177,10 +204,15 @@ export class CalibrationManager {
     // Average all samples for a stable offset
     const avg = this._samples.reduce((a, b) => a + b, 0) / this._samples.length
     this._offset   = Math.round(avg * 10) / 10   // 1 decimal place
-    this._captured = true
+    this._captured        = true
+    this._capturedContext = this._context
 
-    // Persist to localStorage
-    saveSettings({ calibration_offset: this._offset, calibration_captured: true })
+    // Persist to localStorage, with the context it belongs to
+    saveSettings({
+      calibration_offset:   this._offset,
+      calibration_captured: true,
+      calibration_context:  this._context,
+    })
 
     this._sampling = false
     const cb = this._onComplete
@@ -189,4 +221,9 @@ export class CalibrationManager {
 
     if (cb) cb(this._offset)
   }
+}
+
+function sameContext(a, b) {
+  return !!a && !!b &&
+    a.patientId === b.patientId && a.joint === b.joint && a.side === b.side
 }

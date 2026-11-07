@@ -99,7 +99,7 @@ The remaining error is **landmark placement**, concentrated in the proximal poin
 
 **Never present Set Zero as the cure for a floored joint**, in the UI or exports (`provenance.test.js` pins this). Fixing either limitation needs goniometer readings at both ends and probably a two-point span calibration. When it happens, bump `CALIBRATION_VERSION` and the `angleConvention` stamp.
 
-**Calibration versioning.** `CalibrationManager` stores `calibration_version` (currently 3) and discards a stale offset once on upgrade, prompting a re-zero. Bump it for any change that rescales the raw angle: v2 = per-joint convention, v3 = 3D→2D. `isCalibrated` uses an explicit `calibration_captured` flag, because an offset of exactly 0.0 is a legitimate capture.
+**Calibration versioning.** `CalibrationManager` stores `calibration_version` (currently 3) and discards a stale offset once on upgrade, prompting a re-zero. Bump it for any change that rescales the raw angle: v2 = per-joint convention, v3 = 3D→2D. `isCalibrated` uses an explicit `calibration_captured` flag, because an offset of exactly 0.0 is a legitimate capture. An offset is stored with the `calibration_context` (patient, joint, side) it was captured on, and `setContext()` drops one that doesn't match. MeasureView calls it on mount and on every joint/side change, because it remounts on its default joint: a left hip's zero was once applied to the right knee after a trip to History. Every reset path spreads `CLEARED_CALIBRATION` (`storage.js`). Clearing the offset but not the flag once saved raw sessions as `calibrated: true`, which suppressed the floor caveat.
 
 ### Frames: one buffer per tick, stored clean and cropped
 
@@ -216,6 +216,7 @@ Unit-test notes:
 E2E and scripts (camera-free ones seed `rom_sessions`, plus IndexedDB blobs where frames matter):
 - `scripts/e2e/verify.mjs` checks no inline image bytes, two IndexedDB blobs, `calibrated: false` (never taps Set Zero), landmark stamps, fractions within 0..1 with a `kind` per point, unfiltered frame angles, and **stored frame aspect = camera stack, not the video stream** (the only proof the crop reaches the snapshot).
 - `verify-landmark-verification.mjs` covers the whole verify → save → revert loop at the real UI, asserting the raw record is untouched.
+- `verify-calibration-scope.mjs` drives Set Zero across a History round trip (dropped for another joint, kept for the same one) and a patient switch (the next session saves `calibrated: false`).
 - `verify-floor-caveat.mjs` covers the History badge, chip, note and PDF. `verify-floor-pdf-render.mjs` renders to PNG; the viewport must be taller than the page or the capture is half transparent.
 - PDF bytes, driven end-to-end: check the `%PDF-` header, page count, image objects and **zero `(\376\377` UTF-16 markers**. Headless Chromium downloads PDFs rather than displaying them.
 - `measure-silhouette-axis.mjs` is the only tool that judges the app independently of MediaPipe (reproduces 10.4° with `--seg1 396,448,820,845 --seg2 400,448,866,896`). **Always pass `--out` and look at the samples.** A low residual can sit on the wrong structure (a door frame, 78° off), and overlapping segments need separate x windows. `measure-overlay-dots.mjs` only reads what the landmarks describe.

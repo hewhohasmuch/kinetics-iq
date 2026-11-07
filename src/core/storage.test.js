@@ -177,6 +177,19 @@ describe('setActivePatientId', () => {
     expect(loadSettings().calibration_offset).toBe(0)
   })
 
+  // Clearing the offset but leaving the flag made the next session read
+  // "Zeroed at 0.0°" and save as calibrated: true — a raw reading that then
+  // exported without its extension-floor caveat.
+  it('clears the captured flag and context with the offset', () => {
+    localStorage.setItem('rom_settings', JSON.stringify({
+      calibration_offset: 12.5, calibration_captured: true,
+      calibration_context: { patientId: 'p', joint: 'knee', side: 'right' },
+    }))
+    setActivePatientId(generateId())
+    expect(loadSettings().calibration_captured).toBe(false)
+    expect(loadSettings().calibration_context).toBeNull()
+  })
+
   it('does not touch calibration when re-selecting the same patient', () => {
     const id = generateId()
     setActivePatientId(id)
@@ -255,6 +268,18 @@ describe('clearAllLocalData', () => {
     expect(loadPatients(true)).toHaveLength(0)
     expect(loadOutbox()).toHaveLength(0)
     expect(getActivePatientId()).toBeNull()
+  })
+
+  it('leaves no calibration flagged as captured', () => {
+    localStorage.setItem('rom_settings', JSON.stringify({
+      calibration_offset: 12.5, calibration_captured: true,
+      calibration_context: { patientId: 'p', joint: 'knee', side: 'right' },
+    }))
+    clearAllLocalData()
+    const s = loadSettings()
+    expect(s.calibration_offset).toBe(0)
+    expect(s.calibration_captured).toBe(false)
+    expect(s.calibration_context).toBeNull()
   })
 })
 
