@@ -119,7 +119,13 @@ async function main() {
 
     const page = await context.newPage()
     let modelFetches = 0
+    let resolveModelFetched
+    const modelFetched = new Promise((resolve) => { resolveModelFetched = resolve })
     page.on('request', (r) => { if (/pose_landmarker.*\.task/.test(r.url())) modelFetches++ })
+    // Listening from before the page loads: a fast warm-up can finish the
+    // fetch before the drawer taps below are done, which a listener attached
+    // afterwards would miss.
+    page.on('requestfinished', (r) => { if (/pose_landmarker.*\.task/.test(r.url())) resolveModelFetched(true) })
     const errors = []
     page.on('pageerror', (e) => errors.push(e.message))
     const statusesSince = async (mark) => (await page.evaluate(() => window.__statuses.slice())).slice(mark)
@@ -140,13 +146,12 @@ async function main() {
     console.log('\n2. Start the camera (the model was already warming since boot)')
     // MediaPipe loads its WASM runtime before it fetches the model, so give
     // the warm-up time; nothing here taps Start Camera.
-    try {
-      await page.waitForEvent('requestfinished',
-        { predicate: (r) => /pose_landmarker.*\.task/.test(r.url()), timeout: 120_000 })
-      pass('model fetched at boot with no Start Camera tap')
-    } catch {
-      fail('no model fetch within 120s of boot — warm-up not running')
-    }
+    const fetched = await Promise.race([
+      modelFetched,
+      new Promise((resolve) => setTimeout(() => resolve(false), 120_000)),
+    ])
+    if (fetched) pass('model fetched at boot with no Start Camera tap')
+    else fail('no model fetch within 120s of boot — warm-up not running')
     await page.waitForTimeout(5_000)                   // landmarker + GPU init after the fetch
     let mark = await statusMark()
     await page.click('#btn-start-camera')
