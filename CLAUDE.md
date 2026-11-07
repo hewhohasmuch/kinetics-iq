@@ -176,7 +176,7 @@ The only localStorage module; local-first, with every mutation also enqueuing an
 | `landmarksRaw` | `{peak, min}`, **immutable** | either end may be null (landmark below visibility) |
 | `verifications` | array (≤1 today) | null/`[]` = never verified |
 
-Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfiltered* angle at each extreme frame); `frameTiltMax`/`frameTiltMin` (per-frame tilt, not recomputable after a drag); `peakFramePath`/`minFramePath`. Calibration is stamped by `SessionRecorder.setCalibration()` at start, which is safe because `_btnCalibrate` is disabled while recording. `captured` is passed explicitly.
+Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfiltered* angle at each extreme frame); `frameTiltMax`/`frameTiltMin` (per-frame tilt, not recomputable after a drag); `peakFramePath`/`minFramePath`. Calibration is stamped by `SessionRecorder.setCalibration()` at start, which is safe because `_btnCalibrate` is disabled while recording, and also while Record waits for the previous take to save. `captured` is passed explicitly.
 
 **Surfacing provenance (`src/core/provenance.js`).** `sessionProvenance()` returns the worst of three mutually exclusive verdicts: `convention`, then `depth` (`angleMode === '3d'` only), then `filter`. `calibrationSummary()` does the same for calibration. History and SessionDetail show an amber badge; legacy points are *marked* on the trend chart, not dropped. Consumers branch on `level !== 'ok'` and read `label`/`reason`. A new verdict needs a new case only in `report.js`'s `warningTail()`.
 
@@ -202,7 +202,7 @@ Also: `modelId`/`modelVersion`; `frameAngleRawMax`/`frameAngleRawMin` (the *unfi
 
 ### MediaPipe loading (`src/detection/pose.js`)
 
-`PoseDetector.init()` loads BlazePose Full (~7MB) from Google's CDN and the WASM from jsDelivr. There is **one detector for the app** (`getPoseDetector()`), warmed by `enterApp()` right after login. A detector per MeasureView once rebuilt the landmarker and a GPU context on every return from History and never closed the old one. Its joint/side are shared state, so set them on every mount. `init()` deduplicates but doesn't cache a failure, or one offline launch would break Start Camera until a reload. The production service worker caches both (`mediapipe-models`/`mediapipe-wasm`, CacheFirst, 90 days). Landmark indices use MediaPipe's subject-anatomical left/right.
+`PoseDetector.init()` loads BlazePose Full (~7MB) from Google's CDN and the WASM from jsDelivr. There is **one detector for the app** (`getPoseDetector()`), warmed by `enterApp()` right after login (at boot in local-only mode). A detector per MeasureView once rebuilt the landmarker and a GPU context on every return from History and never closed the old one. Its joint/side are shared state, so set them on every mount. `init()` deduplicates but doesn't cache a failure, or one offline launch would break Start Camera until a reload. The production service worker caches both (`mediapipe-models`/`mediapipe-wasm`, CacheFirst, 90 days). Landmark indices use MediaPipe's subject-anatomical left/right.
 
 ## Testing
 

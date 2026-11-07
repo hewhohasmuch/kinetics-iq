@@ -33,7 +33,7 @@ description: How to run and drive KineticsIQ end-to-end in a headless environmen
 - Key ids: `#btn-start-camera`, `#angle-display` (readout, `--°` until pose found), `#btn-calibrate` (Set Zero, ~2s sampling), `#btn-record-start/stop`, `#btn-notes-skip`, `#btn-history`, `.session-row`, `#btn-signout`, `#btn-new-patient`, `#pf-name`, `.form-save`, login: `#login-email/password/submit`. The selector drawer is `#selector-drawer` / `#selector-handle` with `.seg-btn[data-joint|data-side|data-position]` inside it, and the off-axis caution is `#plane-warning`.
 - `#btn-history` sits in the controls row, which is **hidden until the camera starts** — Playwright's `click()` waits for visibility and times out. When skipping the camera, wait for `state: 'attached'` and click it through `page.evaluate(() => document.getElementById('btn-history').click())`.
 - Model + first detection takes 30–90s headless; wait on `#angle-display` matching `/^-?\d+°$/` with a generous timeout. The `-?` is required — once Set Zero has been tapped, anything past the zero point in the extension direction renders negative.
-- A seeded `calibration_offset` only survives mount with `calibration_captured: true` **and** a `calibration_context` `{patientId, joint, side}` matching the active patient and the view's joint/side. The view opens on the seeded `measure_selection` when its `patientId` matches, else on knee plus the patient's `affectedSide` (else right). Anything else is dropped as another limb's zero. `scripts/verify-calibration-scope.mjs` drives this.
+- MeasureView opens on the seeded `measure_selection` when its `patientId` matches the active patient, else on knee plus the patient's `affectedSide` (else right). A seeded `calibration_offset` survives mount only with `calibration_captured: true` **and** a `calibration_context` `{patientId, joint, side}` matching that patient and the joint/side the view opened on. Anything else is dropped as another limb's zero. `scripts/verify-calibration-scope.mjs` drives this.
 - Leaving Measure mid-take (or with the note box open) **saves** the take. A drive that taps History to abandon a recording now gets an extra session, so stop and Skip deliberately. Snapshot blobs land shortly after Skip returns, so poll IndexedDB rather than reading once. After a History or chip tap they're already written, because the leave waits for the save. `scripts/verify-recording-not-lost.mjs` covers every exit.
 - MeasureView reopens with the camera running if it was running when you left for History or Patients, so after a round trip wait on `#angle-display`, not `#btn-start-camera`. Stop the camera first for a cold return. `scripts/verify-measure-warm-start.mjs` covers resume, selection carry-over and the one-model-fetch rule.
 - `#btn-calibrate` sampling ends on its own after 20 detection frames, which headless (~2Hz) stretches to ~10–20s. Wait for its label to return to `Set Zero` rather than a fixed timeout, then read `#cal-status`.
@@ -55,9 +55,10 @@ it is a layout question — and layout is the part `src/ui/` has no unit tests f
   hold: a check made 120ms after a joint change reported 3.5px of clearance where the settled
   answer is 12px. It passed the assertion, but the number was fiction.
 - The drawer carries its position row from mount (`_renderSelection()`), so its height
-  without the camera is the real one (135px at a 393px width). Before the drawer showed at
-  mount, a drive that forced it visible got a 111px drawer with no position row and measured
-  its own harness. Selecting a joint does *not* change the height in the app — a
+  without the camera is the real one. Before the drawer showed at mount, a drive that forced
+  it visible got a drawer one row (~24px) short and measured its own harness. Read the height
+  rather than hardcoding one: it follows platform text rendering (144px at a 393px width on
+  Windows Chromium, where an earlier note recorded 135px). Selecting a joint does *not* change the height in the app — a
   position row is one flex row at two entries or three — so the re-measure in
   `_renderPositions()` is a guard against a wrapped row or larger platform text, and a drive
   at one viewport will not exercise it.
