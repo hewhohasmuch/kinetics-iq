@@ -19,7 +19,7 @@
  * Reuses the verify:e2e fake-camera fixture. Several minutes headless.
  */
 import { chromium } from 'playwright'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { request as httpsRequest } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -88,9 +88,12 @@ async function setZero(page) {
 async function main() {
   const y4m = await ensureFixture()
 
-  const server = spawn('npx', ['vite', '--port', String(PORT), '--strictPort'], {
-    cwd: join(HERE, '..'), shell: true, stdio: 'ignore',
-  })
+  // Vite's own entry run with node, not `npx` through a shell: on Windows
+  // kill() then ends only the shell, and the orphaned server keeps the port.
+  const root = join(HERE, '..')
+  const server = spawn(process.execPath,
+    [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(PORT), '--strictPort'],
+    { cwd: root, stdio: 'ignore' })
   await waitForServer(URL)
 
   const browser = await chromium.launch({
@@ -184,10 +187,7 @@ async function main() {
     if (errors.length) fail(`page errors: ${errors.join(' | ')}`)
   } finally {
     await browser.close()
-    // With shell: true, kill() on Windows ends only the shell, leaving vite
-    // holding the port; take the whole tree down.
-    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' })
-    else server.kill()
+    server.kill()
   }
 
   console.log(failures ? `\n${failures} check(s) failed\n` : '\nAll checks passed\n')

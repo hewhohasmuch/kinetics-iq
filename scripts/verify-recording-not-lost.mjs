@@ -12,7 +12,7 @@
  * Reuses the verify:e2e fake-camera fixture. A few minutes headless.
  */
 import { chromium } from 'playwright'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { request as httpsRequest } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -20,7 +20,7 @@ import { ensureFixture } from './e2e/fixture.mjs'
 
 const HERE   = dirname(fileURLToPath(import.meta.url))
 const HEADED = process.argv.includes('--headed')
-const PORT   = 5178
+const PORT   = 5179   // 5178 is verify-landmark-verification.mjs
 const URL    = `https://localhost:${PORT}/`
 const TAKE_MS = 5_000
 
@@ -109,9 +109,12 @@ async function expectSaved(page, before, what, { patientId = P1.id, note } = {})
 async function main() {
   const y4m = await ensureFixture()
 
-  const server = spawn('npx', ['vite', '--port', String(PORT), '--strictPort'], {
-    cwd: join(HERE, '..'), shell: true, stdio: 'ignore',
-  })
+  // Vite's own entry run with node, not `npx` through a shell: on Windows
+  // kill() then ends only the shell, and the orphaned server keeps the port.
+  const root = join(HERE, '..')
+  const server = spawn(process.execPath,
+    [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), '--port', String(PORT), '--strictPort'],
+    { cwd: root, stdio: 'ignore' })
   await waitForServer(URL)
 
   const browser = await chromium.launch({
@@ -225,10 +228,7 @@ async function main() {
     else pass('no page errors')
   } finally {
     await browser.close()
-    // With shell: true, kill() on Windows ends only the shell, leaving vite
-    // holding the port; take the whole tree down.
-    if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' })
-    else server.kill()
+    server.kill()
   }
 
   console.log(failures ? `\n${failures} check(s) failed\n` : '\nAll checks passed\n')
