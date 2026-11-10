@@ -5,8 +5,9 @@
  * open the note box for it, and then navigate away — so the session existed
  * only in the discarded view and was never saved. The same happened to a take
  * whose note box was still open, and Stop Camera mid-recording threw the take
- * away outright. Each path below must end with the session in storage, its
- * snapshots in IndexedDB, and (where typed) its note.
+ * away outright (it is now hidden while recording). Each path below must end
+ * with the session in storage, its snapshots in IndexedDB, and (where typed)
+ * its note.
  *
  * Retake is the one deliberate discard, checked from the other side: nothing
  * reaches storage or the outbox, Undo restores the take with its note and
@@ -212,17 +213,29 @@ async function main() {
     await page.waitForSelector('.patients-view')
     await expectSaved(page, before, 'patient chip mid-take', { patientId: P1.id })
 
-    console.log('\n4. Stop Camera mid-recording: the note box opens, nothing is thrown away')
+    // Stop Camera used to be on screen mid-take, and on device it was the
+    // button tapped to end one, turning the camera off. It is hidden while
+    // recording now; tapping it with the note box open must still lose nothing.
+    console.log('\n4. Stop Camera: hidden while recording; with the note box open, nothing is thrown away')
     await page.click(`.patient-row[data-id="${P1.id}"]`)
     await waitForReadout(page)
     before = await sessions(page)
     await record(page)
+    if (!await page.isVisible('#btn-stop-camera') && await page.isVisible('#btn-record-stop')) {
+      pass('only Stop & Save offered while recording')
+    } else fail('Stop Camera visible while recording')
+    await page.click('#btn-record-stop')
+    await page.waitForSelector('#notes-panel', { state: 'visible' })
+    if (await page.isVisible('#btn-stop-camera')) pass('Stop Camera back after Stop & Save')
+    else fail('Stop Camera still hidden after Stop & Save')
+    if (!await page.isVisible('#btn-start-camera')) pass('camera still running after Stop & Save')
+    else fail('Stop & Save turned the camera off')
     await page.click('#btn-stop-camera')
-    if (await page.isVisible('#notes-panel')) pass('note box offered for the stopped take')
-    else fail('no note box after Stop Camera mid-take')
-    if (await page.isVisible('#btn-notes-skip')) await page.click('#btn-notes-skip')
+    if (await page.isVisible('#notes-panel')) pass('note box survives Stop Camera')
+    else fail('note box closed by Stop Camera')
+    await page.click('#btn-notes-skip')
     await page.waitForTimeout(1_000)
-    await expectSaved(page, before, 'Stop Camera mid-take')
+    await expectSaved(page, before, 'Stop Camera with the note box open')
 
     console.log('\n5. Stop & Save, then Record again without answering the note box')
     await page.click('#btn-start-camera')

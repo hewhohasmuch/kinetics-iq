@@ -198,8 +198,9 @@ export class MeasureView {
           </div>
         </div>
 
-        <!-- Camera controls -->
-        <div class="controls">
+        <!-- Camera controls. Hidden while a take records: the wide Stop Camera
+             button read as the way to end the take (see _startRecording). -->
+        <div id="camera-controls" class="controls">
           <button id="btn-start-camera" class="btn-primary">Start Camera</button>
           <button id="btn-stop-camera"  class="btn-ghost" style="display:none">Stop Camera</button>
         </div>
@@ -770,6 +771,7 @@ export class MeasureView {
     this._calBar         = document.getElementById('cal-bar')
     this._btnStart       = document.getElementById('btn-start-camera')
     this._btnStop        = document.getElementById('btn-stop-camera')
+    this._cameraControls = document.getElementById('camera-controls')
     this._activeControls = document.getElementById('active-controls')
     this._btnCalibrate   = document.getElementById('btn-calibrate')
     this._btnRecordStart = document.getElementById('btn-record-start')
@@ -930,6 +932,7 @@ export class MeasureView {
     this._btnStop.style.display           = 'none'
     this._btnStart.style.display          = 'block'
     this._btnStart.disabled               = false
+    this._cameraControls.style.display    = ''
     this._activeControls.style.display    = 'none'
     this._closeDrawer()
     this._romBar.style.display          = 'none'
@@ -1033,6 +1036,11 @@ export class MeasureView {
     this._minHasFrame = false
     this._btnRecordStart.style.display = 'none'
     this._btnRecordStop.style.display  = 'block'
+    // The only stop on screen is Stop & Save. The wide Stop Camera button
+    // above it was being tapped to end takes, which also turned the camera
+    // off (found on device). The whole row goes, not just the button, or its
+    // padding leaves an empty strip.
+    this._cameraControls.style.display = 'none'
     this._btnCalibrate.disabled        = true
     this._romBar.style.display         = 'block'
     this._angleDisplay.classList.add('recording')
@@ -1045,6 +1053,7 @@ export class MeasureView {
 
     this._btnRecordStop.style.display  = 'none'
     this._btnRecordStart.style.display = 'block'
+    this._cameraControls.style.display = ''
     this._btnCalibrate.disabled        = false
     this._angleDisplay.classList.remove('recording')
     this._setStatus('running', 'Detecting pose…')
