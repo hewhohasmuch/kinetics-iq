@@ -112,7 +112,7 @@ export class CalibrationManager {
    *
    * Tracked explicitly rather than inferred from `offset !== 0`: a captured
    * offset of exactly 0.0 is legitimate (the joint really was at neutral), and
-   * inferring it reported that as "Not zeroed — tap Set Zero".
+   * inferring it reported that as not zeroed.
    */
   get isCalibrated() { return this._captured }
 

@@ -146,7 +146,7 @@ describe('CalibrationManager', () => {
 
   // A captured offset of exactly 0.0 is legitimate (a joint genuinely at its
   // neutral). Inferring "calibrated" from `offset !== 0` reported that as
-  // "Not zeroed — tap Set Zero", so the state must be tracked explicitly.
+  // not zeroed, so the state must be tracked explicitly.
   it('isCalibrated is true after capturing an offset of exactly 0', () => {
     cal.startSampling(() => {})
     for (let i = 0; i < 20; i++) cal.addSample(0)
