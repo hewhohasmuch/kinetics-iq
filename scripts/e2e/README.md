@@ -85,6 +85,9 @@ each on its own port so it can run beside this one:
   resume after History/Patients, selection carry-over.
 - `scripts/verify-recording-not-lost.mjs`: no exit from Measure discards a take, except Retake (which it also covers).
 
+`scripts/verify-patients.mjs` needs no camera or fixture: it seeds patients and
+drives the Patients search and the New patient form's Save & measure.
+
 ## Known environment limits
 
 - Headless Chromium runs BlazePose on **CPU**, landing around 2Hz rather than

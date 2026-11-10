@@ -15,6 +15,7 @@ import {
 import { isConfigured, signOut } from '../core/supabase.js'
 import { syncNow, getStatus, onSyncStatus } from '../core/sync.js'
 import { listPending } from '../core/imageStore.js'
+import { filterPatients } from '../core/patientSearch.js'
 
 export class PatientsView {
   /**
@@ -28,6 +29,7 @@ export class PatientsView {
     this.onPatientSelected = onPatientSelected
     this._editingId        = null   // patient id being edited, or null for create
     this._unsubSync        = null
+    this._query            = ''     // search text; kept here because _renderList() re-runs on every sync pass
   }
 
   mount() {
@@ -57,16 +59,30 @@ export class PatientsView {
     this._formPanel = document.getElementById('patient-form-panel')
     this._formTitle = document.getElementById('patient-form-title')
     this._btnArchive = document.getElementById('btn-archive-patient')
+    this._searchWrap = document.getElementById('patient-search-wrap')
+    this._searchEl   = document.getElementById('patient-search')
+    this._formEl     = document.getElementById('patient-form')
+    this._btnSave    = document.getElementById('btn-form-save')
+    this._btnSaveMeasure = document.getElementById('btn-form-save-measure')
+    this._formError  = document.getElementById('patient-form-error')
 
     document.getElementById('btn-back').addEventListener('click', () => this.onBack())
     document.getElementById('btn-new-patient').addEventListener('click', () => this._openForm(null))
     document.getElementById('btn-form-cancel').addEventListener('click', () => this._closeForm())
     this._btnArchive.addEventListener('click', () => this._handleArchive())
 
-    document.getElementById('patient-form').addEventListener('submit', (e) => {
+    this._searchEl.addEventListener('input', () => {
+      this._query = this._searchEl.value
+      this._renderList()
+    })
+
+    // Plain Save is the form's submit, so the keyboard's Go key saves and
+    // stays on this screen. Save & measure is a deliberate tap.
+    this._formEl.addEventListener('submit', (e) => {
       e.preventDefault()
       this._handleSave()
     })
+    this._btnSaveMeasure.addEventListener('click', () => this._handleSaveAndMeasure())
 
     const btnSignOut = document.getElementById('btn-signout')
     if (isConfigured()) {
@@ -110,13 +126,25 @@ export class PatientsView {
   // ─── List ────────────────────────────────────────────────────────────
 
   _renderList() {
-    const patients = loadPatients()
+    const all      = loadPatients()
     const activeId = getActivePatientId()
 
-    if (patients.length === 0) {
+    // Nothing to search in an empty roster.
+    this._searchWrap.style.display = all.length > 0 ? 'block' : 'none'
+
+    if (all.length === 0) {
       this._listEl.innerHTML = `
         <div class="empty-state">
           No patients yet.<br>Tap “+ New patient” to create the first profile.
+        </div>`
+      return
+    }
+
+    const patients = filterPatients(all, this._query)
+    if (patients.length === 0) {
+      this._listEl.innerHTML = `
+        <div class="empty-state" id="patient-no-match">
+          No patients match “${this._esc(this._query.trim())}”.
         </div>`
       return
     }
@@ -168,6 +196,13 @@ export class PatientsView {
     this._formTitle.textContent = p ? 'Edit patient' : 'New patient'
     this._btnArchive.style.display = p ? 'block' : 'none'
 
+    // Save & measure is for a NEW patient only: an existing one is a single
+    // tap away in the list. Whichever button is the main action is the green one.
+    this._btnSaveMeasure.style.display = p ? 'none' : 'block'
+    this._btnSave.classList.toggle('btn-primary', Boolean(p))
+    this._btnSave.classList.toggle('btn-ghost', !p)
+    this._formError.style.display = 'none'
+
     document.getElementById('pf-name').value      = p?.name ?? ''
     document.getElementById('pf-dob').value       = p?.dob ?? ''
     document.getElementById('pf-mrn').value       = p?.mrn ?? ''
@@ -185,12 +220,18 @@ export class PatientsView {
     this._editingId = null
   }
 
+  /**
+   * Save the form.
+   *
+   * @returns {object|null} the stored patient, or null if nothing was saved
+   *   (empty name, or storage refused) — in which case the form stays open.
+   */
   _handleSave() {
     const name = document.getElementById('pf-name').value.trim()
-    if (!name) return
+    if (!name) return null
 
     const existing = this._editingId ? getPatient(this._editingId) : null
-    upsertPatient({
+    const record = upsertPatient({
       ...(existing ?? {}),
       name,
       dob:          document.getElementById('pf-dob').value || null,
@@ -201,8 +242,34 @@ export class PatientsView {
       notes:        document.getElementById('pf-notes').value.trim(),
     })
 
+    // upsertPatient returns null when localStorage refuses the write. Closing
+    // the form here looked exactly like a successful save.
+    if (!record) {
+      this._formError.style.display = 'block'
+      return null
+    }
+
+    // A new patient must be visible in the list they were just added to, so a
+    // leftover search that doesn't match them is dropped.
+    if (!existing) {
+      this._query = ''
+      this._searchEl.value = ''
+    }
+
     this._closeForm()
     this._renderList()
+    return record
+  }
+
+  /** Save a new patient, make them the active patient and go to Measure. */
+  _handleSaveAndMeasure() {
+    // A type="button" skips the form's own required-name check, so run it.
+    if (!this._formEl.reportValidity()) return
+    const record = this._handleSave()
+    if (!record) return
+    // The same two calls a tap on a list row makes.
+    setActivePatientId(record.id)
+    this.onPatientSelected()
   }
 
   _handleArchive() {
@@ -233,6 +300,11 @@ export class PatientsView {
 
         <div class="patients-actions">
           <button id="btn-new-patient" class="btn-primary btn-new">+ New patient</button>
+          <div id="patient-search-wrap" class="patient-search-wrap" style="display:none">
+            <input id="patient-search" class="form-input patient-search" type="search"
+              placeholder="Search name or MRN" aria-label="Search patients"
+              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+          </div>
         </div>
 
         <div id="patient-list" class="patient-list"></div>
@@ -278,8 +350,13 @@ export class PatientsView {
               <textarea id="pf-notes" class="form-input form-textarea" maxlength="500" rows="3"></textarea>
             </label>
 
+            <div id="patient-form-error" class="form-error" style="display:none">
+              Could not save — storage may be full.
+            </div>
+
             <div class="form-buttons">
-              <button type="submit" class="btn-primary form-save">Save</button>
+              <button type="button" id="btn-form-save-measure" class="btn-primary form-save-measure">Save &amp; measure</button>
+              <button type="submit" id="btn-form-save" class="btn-ghost form-save">Save</button>
               <button type="button" id="btn-form-cancel" class="btn-ghost">Cancel</button>
             </div>
             <button type="button" id="btn-archive-patient" class="btn-archive" style="display:none">
@@ -333,6 +410,11 @@ export class PatientsView {
           padding: 12px;
           font-size: 15px;
         }
+
+        .patient-search-wrap { margin-top: 10px; }
+
+        /* 16px: iOS Safari zooms the page when a smaller input takes focus. */
+        .patient-search { font-size: 16px; }
 
         .patient-list {
           flex: 1;
@@ -486,8 +568,14 @@ export class PatientsView {
           margin-top: 6px;
         }
 
-        .form-save { flex: 2; padding: 12px; }
-        .form-buttons .btn-ghost { flex: 1; padding: 12px; }
+        .form-buttons button { padding: 12px 8px; white-space: nowrap; }
+        .form-buttons .btn-ghost   { flex: 1; }
+        .form-buttons .btn-primary { flex: 2; }
+
+        .form-error {
+          color: #f87171;
+          font-size: 13px;
+        }
 
         .btn-archive {
           background: none;
