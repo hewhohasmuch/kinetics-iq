@@ -69,8 +69,10 @@ const blobKeys = (page, id) => page.evaluate((sid) => new Promise((resolve) => {
   }
 }), id)
 
-/** blobKeys, polled: encoding + the IndexedDB write finish after Skip returns. */
-async function blobKeysEventually(page, id, timeoutMs = 10_000) {
+/** blobKeys, polled: encoding + the IndexedDB write finish after Skip returns.
+ *  Headless, with BlazePose on the CPU, that took 16-26s per take (both blobs
+ *  always landed), so the limit is generous. */
+async function blobKeysEventually(page, id, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs
   let keys = await blobKeys(page, id)
   while (keys.length < 2 && Date.now() < deadline) {
