@@ -81,6 +81,7 @@ export class MeasureView {
 
     this.currentAngle  = null
     this._pendingSession = null  // holds session between stop() and note entry
+    this._discardedTake  = null  // { session, note } after Retake, until Undo or final
     this._unsubSync      = null
   }
 
@@ -219,7 +220,16 @@ export class MeasureView {
               maxlength="200" autocomplete="off" autocorrect="on" />
             <button id="btn-notes-save" class="btn-primary btn-notes-save">Save</button>
             <button id="btn-notes-skip" class="btn-ghost btn-notes-skip">Skip</button>
+            <button id="btn-notes-retake" class="btn-notes-retake">Retake</button>
           </div>
+        </div>
+
+        <!-- After Retake, in the note box's place. No timer: the take stays
+             recoverable until the clinician acts (see _discardPendingSession). -->
+        <div id="discard-toast" class="discard-toast" style="display:none">
+          <span class="discard-toast-msg">Take discarded</span>
+          <button id="btn-discard-undo"    class="discard-undo">Undo</button>
+          <button id="btn-discard-dismiss" class="discard-dismiss" aria-label="Dismiss">×</button>
         </div>
 
         <div id="save-feedback" class="save-feedback" style="display:none">Session saved ✓</div>
@@ -570,6 +580,7 @@ export class MeasureView {
 
         .notes-input {
           flex: 1;
+          min-width: 0;   /* else its intrinsic width pushes Retake off a 375px screen */
           background: #1a1a1a;
           border: 1px solid #333;
           border-radius: 8px;
@@ -599,6 +610,65 @@ export class MeasureView {
           padding: 10px 12px !important;
           font-size: 14px;
           flex-shrink: 0;
+        }
+
+        /* Quieter than Save/Skip, and red: the only button that loses a take. */
+        .btn-notes-retake {
+          padding: 10px 6px;
+          font-size: 14px;
+          flex-shrink: 0;
+          background: none;
+          border: none;
+          color: #f87171;
+          cursor: pointer;
+        }
+
+        /* Same slot and height as the note box, so the camera doesn't jump. */
+        .discard-toast {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: #1c1c1c;
+          border-top: 1px solid #333;
+          padding: 8px 16px;
+          flex-shrink: 0;
+          animation: discard-toast-in 0.15s ease-out;
+        }
+
+        @keyframes discard-toast-in {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: none; }
+        }
+
+        .discard-toast-msg {
+          flex: 1;
+          font-size: 14px;
+          color: #ccc;
+        }
+
+        .discard-undo {
+          min-height: 44px;
+          padding: 0 16px;
+          background: none;
+          border: none;
+          color: #4ade80;
+          font-size: 14px;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          cursor: pointer;
+        }
+
+        .discard-dismiss {
+          width: 44px;
+          height: 44px;
+          padding: 0;
+          background: none;
+          border: none;
+          color: #777;
+          font-size: 22px;
+          line-height: 1;
+          cursor: pointer;
         }
 
         .selector-drawer {
@@ -715,6 +785,10 @@ export class MeasureView {
     this._notesInput     = document.getElementById('notes-input')
     this._btnNotesSave   = document.getElementById('btn-notes-save')
     this._btnNotesSkip   = document.getElementById('btn-notes-skip')
+    this._btnNotesRetake = document.getElementById('btn-notes-retake')
+    this._discardToast   = document.getElementById('discard-toast')
+    this._btnDiscardUndo = document.getElementById('btn-discard-undo')
+    this._btnDiscardDismiss = document.getElementById('btn-discard-dismiss')
     this._saveFeedback   = document.getElementById('save-feedback')
     this._errorMsg       = document.getElementById('error-msg')
     this._patientChip    = document.getElementById('patient-chip')
@@ -750,6 +824,9 @@ export class MeasureView {
     this._btnRecordStop.addEventListener('click',  () => this._stopRecording())
     this._btnNotesSave.addEventListener('click', () => this._saveWithNote())
     this._btnNotesSkip.addEventListener('click', () => this._saveWithNote(''))
+    this._btnNotesRetake.addEventListener('click',    () => this._discardPendingSession())
+    this._btnDiscardUndo.addEventListener('click',    () => this._undoDiscard())
+    this._btnDiscardDismiss.addEventListener('click', () => this._finaliseDiscard())
     this._notesInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this._saveWithNote()
     })
@@ -763,6 +840,9 @@ export class MeasureView {
       if (this._leaving) return            // a second tap while the save runs
       this._leaving = true
       const cameraWasRunning = this.camera.isRunning
+      // A take the clinician chose to discard stays discarded: leaving is
+      // moving on, not a request to save it.
+      this._finaliseDiscard()
       await this._flushPendingSession()
       this._onLeave?.(cameraWasRunning)
       this._stopCamera()
@@ -921,6 +1001,9 @@ export class MeasureView {
       this._showError('Select a patient before recording — tap the patient chip at the top right.')
       return
     }
+    // The new take reuses the snapshot canvases, so a discarded take cannot
+    // be undone past this point.
+    this._finaliseDiscard()
     // The previous take may still be waiting in the note box, or mid-save.
     // A new take reuses the snapshot canvases and _pendingSession, so it would
     // overwrite that one; and a save still finishing resets the frame flags
@@ -978,8 +1061,8 @@ export class MeasureView {
     this._showNotesPanel()
   }
 
-  _showNotesPanel() {
-    this._notesInput.value        = ''
+  _showNotesPanel(note = '') {
+    this._notesInput.value        = note
     this._notesPanel.style.display = 'block'
     // Small delay so the keyboard doesn't open immediately on mobile
     setTimeout(() => this._notesInput.focus(), 300)
@@ -989,6 +1072,43 @@ export class MeasureView {
     this._notesPanel.style.display = 'none'
     this._notesInput.value         = ''
     this._notesInput.blur()
+  }
+
+  /**
+   * Retake: the one deliberate way to throw a take away. Every other exit
+   * saves it (_flushPendingSession). Nothing has reached storage, the outbox
+   * or the cloud yet, so there is nothing to clean up.
+   *
+   * There is no timer. The clinician taps Retake and turns back to the
+   * patient, so a countdown would expire while they aren't looking. The take
+   * (session, typed note and both snapshot canvases) is held until Undo, ×,
+   * the next Record or leaving the view. Holding it costs two canvases.
+   */
+  _discardPendingSession() {
+    if (!this._pendingSession) return
+    this._discardedTake  = { session: this._pendingSession, note: this._notesInput.value }
+    this._pendingSession = null
+    this._hideNotesPanel()
+    this._discardToast.style.display = 'flex'
+  }
+
+  /** Put the discarded take back in the note box, typed note included. */
+  _undoDiscard() {
+    const take = this._discardedTake
+    if (!take) return
+    this._discardedTake = null
+    this._discardToast.style.display = 'none'
+    this._pendingSession = take.session
+    this._showNotesPanel(take.note)
+  }
+
+  /** Make a Retake final. No-op when nothing is discarded. */
+  _finaliseDiscard() {
+    if (!this._discardedTake) return
+    this._discardedTake = null
+    this._discardToast.style.display = 'none'
+    this._maxHasFrame = false
+    this._minHasFrame = false
   }
 
   /**
