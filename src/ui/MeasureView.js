@@ -456,9 +456,11 @@ export class MeasureView {
           background: rgba(74,222,128,0.15);
           color: #4ade80;
         }
+        /* Neutral, not amber: a raw reading is a legitimate way to measure,
+           and zeroing is not always the better one. */
         .cal-status.uncalibrated {
-          background: rgba(250,204,21,0.15);
-          color: #facc15;
+          background: rgba(255,255,255,0.08);
+          color: #ccc;
         }
 
         .rom-bar {
@@ -986,7 +988,9 @@ export class MeasureView {
       this._calStatus.textContent = `Zeroed at ${this.calibration.offset.toFixed(1)}°`
     } else {
       this._calStatus.className   = 'cal-status uncalibrated'
-      this._calStatus.textContent = 'Not zeroed — tap Set Zero'
+      // States what a take will be recorded as (the same words the session
+      // detail and exports use), and does not tell the clinician to zero.
+      this._calStatus.textContent = 'Not zeroed — raw angles'
     }
   }
 
