@@ -353,7 +353,11 @@ export class MeasureView {
           display: flex;
           align-items: center;
           gap: 8px;
-          margin: 6px 12px 0;
+          /* The middle 4/5, lifted off the bottom edge: at full width and flush
+             to the bottom, an iPhone's rounded corners hid both ends. A
+             screenshot is rectangular and will not show that. */
+          width: 80%;
+          margin: 6px auto calc(8px + env(safe-area-inset-bottom));
         }
         .gauge-track {
           flex: 1;
