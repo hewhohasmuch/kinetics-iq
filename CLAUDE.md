@@ -142,6 +142,10 @@ The selector drawer picks joint, side and position, handed to `SessionRecorder.s
 
 **The selection carries over** across remounts (`restoreSelection()`, `src/core/selection.js`; stored as `measure_selection`). Joint and side carry over for the same patient only. With nothing to restore, the view opens on knee and the patient's `affectedSide` (else right). The position carries over only with the joint it was tapped for: a joint change nulls it, a side change keeps it (same test, other limb), and the restore re-checks it against `positionsFor()`. So a non-null position is always one the clinician tapped for this patient and joint. The template carries no selection; `_renderSelection()` paints it at mount, and the drawer shows before the camera starts.
 
+### Patients (`src/ui/PatientsView.js`)
+
+A tap on a row makes that patient active and opens Measure. **Search** filters the roster through `filterPatients()` (`src/core/patientSearch.js`, pure): every typed word must appear in the name or MRN, ignoring case and accents. Diagnosis is deliberately not searched. The query lives on the view (`_query`) and the field sits outside the list, because `_renderList()` re-runs on every sync pass. The New patient form's **Save & measure** makes the same two calls as a row tap after saving; plain **Save** stays the form's submit, so the keyboard's Go key never navigates. A save that storage refuses (`upsertPatient()` → null) keeps the form open with an error; it once closed as if it had saved.
+
 ### Accounts & cloud sync
 
 Optional, gated by `isConfigured()`.
@@ -225,6 +229,7 @@ E2E and scripts (camera-free ones seed `rom_sessions`, plus IndexedDB blobs wher
 - `verify-calibration-scope.mjs` drives Set Zero across a History round trip (kept for the same joint, dropped when the view reopens on another) and a patient switch (the next session saves `calibrated: false`).
 - `verify-recording-not-lost.mjs` takes History and the chip mid-take, checks Stop Camera is hidden while recording and loses nothing with the note box open, History with the note box open, and Record over an unanswered note box. Each must leave the session, its note and both blobs in storage. It then checks Retake: no session, outbox op or blob while discarded (including after 8s, so no timer); Undo restores the note and snapshots; Record, × and History make it final.
 - `verify-measure-warm-start.mjs` checks one model fetch per run, warm-up before any tap, camera resume (and no resume when it was stopped), and selection carry-over per patient. Chromium grants `getUserMedia` without a gesture, so iOS resume still needs a device.
+- `verify-patients.mjs` (camera-free, under a minute) covers the Patients search, a tap on a filtered row, Save & measure (including an empty name and a refused storage write, neither of which may navigate), plain Save via Enter, and the Edit form.
 - `verify-floor-caveat.mjs` covers the History badge, chip, note and PDF. `verify-floor-pdf-render.mjs` renders to PNG; the viewport must be taller than the page or the capture is half transparent.
 - PDF bytes, driven end-to-end: check the `%PDF-` header, page count, image objects and **zero `(\376\377` UTF-16 markers**. Headless Chromium downloads PDFs rather than displaying them.
 - `measure-silhouette-axis.mjs` is the only tool that judges the app independently of MediaPipe (reproduces 10.4° with `--seg1 396,448,820,845 --seg2 400,448,866,896`). **Always pass `--out` and look at the samples.** A low residual can sit on the wrong structure (a door frame, 78° off), and overlapping segments need separate x windows. `measure-overlay-dots.mjs` only reads what the landmarks describe.
