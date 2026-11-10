@@ -83,7 +83,7 @@ each on its own port so it can run beside this one:
   and dropped for another joint or patient.
 - `scripts/verify-measure-warm-start.mjs`: one model fetch per run, camera
   resume after History/Patients, selection carry-over.
-- `scripts/verify-recording-not-lost.mjs`: no exit from Measure discards a take.
+- `scripts/verify-recording-not-lost.mjs`: no exit from Measure discards a take, except Retake (which it also covers).
 
 ## Known environment limits
 

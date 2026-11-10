@@ -8,6 +8,10 @@
  * away outright. Each path below must end with the session in storage, its
  * snapshots in IndexedDB, and (where typed) its note.
  *
+ * Retake is the one deliberate discard, checked from the other side: nothing
+ * reaches storage or the outbox, Undo restores the take with its note and
+ * snapshots, and Record, × or leaving make the discard final.
+ *
  * Usage: node scripts/verify-recording-not-lost.mjs [--headed]
  * Reuses the verify:e2e fake-camera fixture. A few minutes headless.
  */
@@ -65,8 +69,10 @@ const blobKeys = (page, id) => page.evaluate((sid) => new Promise((resolve) => {
   }
 }), id)
 
-/** blobKeys, polled: encoding + the IndexedDB write finish after Skip returns. */
-async function blobKeysEventually(page, id, timeoutMs = 10_000) {
+/** blobKeys, polled: encoding + the IndexedDB write finish after Skip returns.
+ *  Headless, with BlazePose on the CPU, that took 16-26s per take (both blobs
+ *  always landed), so the limit is generous. */
+async function blobKeysEventually(page, id, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs
   let keys = await blobKeys(page, id)
   while (keys.length < 2 && Date.now() < deadline) {
@@ -101,9 +107,36 @@ async function expectSaved(page, before, what, { patientId = P1.id, note } = {})
     if (s.notes === note) pass(`${what}: note kept ("${note}")`)
     else fail(`${what}: note is "${s.notes}", expected "${note}"`)
   }
-  const keys = await blobKeys(page, s.id)
+  // Polled: after Save/Skip, encoding can outlast a fixed wait headless.
+  const keys = await blobKeysEventually(page, s.id)
   if (keys.length === 2) pass(`${what}: both snapshots in IndexedDB`)
   else fail(`${what}: ${keys.length} snapshot blobs (expected 2)`)
+}
+
+const outbox = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('rom_outbox') || '[]'))
+
+/** Assert a discarded take left no session, no outbox op and no snapshot blob. */
+async function expectNothingSaved(page, before, outboxBefore, what) {
+  const added = (await sessions(page)).filter(s => !before.some(b => b.id === s.id))
+  if (added.length === 0) pass(`${what}: no session saved`)
+  else fail(`${what}: ${added.length} session(s) saved`)
+  const ops = (await outbox(page)).length - outboxBefore.length
+  if (ops === 0) pass(`${what}: nothing queued for sync`)
+  else fail(`${what}: ${ops} outbox op(s) queued`)
+  const blobs = await page.evaluate(() => new Promise((resolve) => {
+    const req = indexedDB.open('kinetics_images')
+    req.onerror = () => resolve(0)
+    req.onsuccess = () => {
+      const db = req.result
+      if (!db.objectStoreNames.contains('images')) return resolve(0)
+      const c = db.transaction('images').objectStore('images').count()
+      c.onsuccess = () => resolve(c.result)
+      c.onerror = () => resolve(0)
+    }
+  }))
+  const expected = (await sessions(page)).length * 2
+  if (blobs === expected) pass(`${what}: no stray snapshot blobs`)
+  else fail(`${what}: ${blobs} blobs for ${expected / 2} sessions`)
 }
 
 async function main() {
@@ -223,6 +256,73 @@ async function main() {
       if (second.timestamp > first.timestamp) pass('takes are distinct recordings (later timestamp)')
       else fail('second take is not later than the first')
     }
+
+    console.log('\n6. Retake, then Undo: the take comes back with its note and snapshots')
+    before = await sessions(page)
+    let outboxBefore = await outbox(page)
+    await record(page)
+    await page.click('#btn-record-stop')
+    await page.waitForSelector('#notes-panel', { state: 'visible' })
+    await page.fill('#notes-input', 'keep me')
+    await page.click('#btn-notes-retake')
+    if (await page.isVisible('#discard-toast')) pass('toast shown')
+    else fail('no toast after Retake')
+    if (!await page.isVisible('#notes-panel')) pass('note box closed')
+    else fail('note box still open after Retake')
+    await page.waitForTimeout(8_000)   // longer than any timer would have been
+    if (await page.isVisible('#discard-toast')) pass('toast still there after 8s (no timer)')
+    else fail('toast went away on its own')
+    await expectNothingSaved(page, before, outboxBefore, 'while discarded')
+    await page.click('#btn-discard-undo')
+    if (!await page.isVisible('#discard-toast') && await page.isVisible('#notes-panel')) {
+      pass('Undo reopened the note box')
+    } else fail('Undo did not reopen the note box')
+    const restoredNote = await page.inputValue('#notes-input')
+    if (restoredNote === 'keep me') pass('typed note restored')
+    else fail(`note box reads "${restoredNote}" after Undo`)
+    await page.click('#btn-notes-save')
+    await page.waitForTimeout(1_000)
+    await expectSaved(page, before, 'Undo then Save', { note: 'keep me' })
+
+    console.log('\n7. Retake, then Record: only the new take is saved')
+    before = await sessions(page)
+    await record(page)
+    await page.click('#btn-record-stop')
+    await page.waitForSelector('#notes-panel', { state: 'visible' })
+    await page.click('#btn-notes-retake')
+    await record(page)
+    if (!await page.isVisible('#discard-toast')) pass('Record closed the toast')
+    else fail('toast still showing during the new take')
+    await page.click('#btn-record-stop')
+    await page.waitForSelector('#notes-panel', { state: 'visible' })
+    await page.click('#btn-notes-skip')
+    await page.waitForTimeout(1_000)
+    await expectSaved(page, before, 'retaken take')
+
+    console.log('\n8. Retake, then ×: nothing saved')
+    before = await sessions(page)
+    outboxBefore = await outbox(page)
+    await record(page)
+    await page.click('#btn-record-stop')
+    await page.waitForSelector('#notes-panel', { state: 'visible' })
+    await page.click('#btn-notes-retake')
+    await page.click('#btn-discard-dismiss')
+    if (!await page.isVisible('#discard-toast') && !await page.isVisible('#notes-panel')) {
+      pass('× closed the toast')
+    } else fail('toast or note box still showing after ×')
+    await expectNothingSaved(page, before, outboxBefore, 'after ×')
+
+    console.log('\n9. Retake, then History: leaving does not save a discarded take')
+    before = await sessions(page)
+    outboxBefore = await outbox(page)
+    await record(page)
+    await page.click('#btn-record-stop')
+    await page.waitForSelector('#notes-panel', { state: 'visible' })
+    await page.fill('#notes-input', 'discard me')
+    await page.click('#btn-notes-retake')
+    await page.click('#btn-history')
+    await page.waitForSelector('.history-view')
+    await expectNothingSaved(page, before, outboxBefore, 'after History')
 
     if (errors.length) fail(`page errors: ${errors.join(' | ')}`)
     else pass('no page errors')
