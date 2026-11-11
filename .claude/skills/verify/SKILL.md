@@ -54,14 +54,16 @@ it is a layout question — and layout is the part `src/ui/` has no unit tests f
   Both elements animate, and a bounding box read sooner measures a position neither will
   hold: a check made 120ms after a joint change reported 3.5px of clearance where the settled
   answer is 12px. It passed the assertion, but the number was fiction.
-- The drawer carries its position row from mount (`_renderSelection()`), so its height
-  without the camera is the real one. Before the drawer showed at mount, a drive that forced
-  it visible got a drawer one row (~24px) short and measured its own harness. Read the height
-  rather than hardcoding one: it follows platform text rendering (144px at a 393px width on
-  Windows Chromium, where an earlier note recorded 135px). Selecting a joint does *not* change the height in the app — a
-  position row is one flex row at two entries or three — so the re-measure in
-  `_renderPositions()` is a guard against a wrapped row or larger platform text, and a drive
-  at one viewport will not exercise it.
+- The drawer carries its position buttons from mount (`_renderSelection()`), so its height
+  without the camera is the real one. Read the height rather than hardcoding one: it follows
+  platform text rendering (321px at a 393px width on Windows Chromium). Selecting a joint does
+  *not* change the height in the app — the five-joint column is taller than Side plus two rows
+  of positions — so the re-measure in `_renderPositions()` is a guard against more positions
+  or larger platform text, and a drive at one viewport will not exercise it.
+- The drawer is capped at the camera stack's height and its grid scrolls. To exercise that,
+  use a viewport short enough that the stack is under ~320px (320×420 gives 235px before the
+  camera starts): the handle must stay inside the stack, and the caution's offset is capped
+  so it stays inside too, overlapping the drawer rather than leaving the top.
 - Assert geometry, not appearance: compare `#plane-warning`'s `getBoundingClientRect().bottom`
   against `#selector-drawer`'s `.top`, and check the closed state still rests 96px above the
   stack floor. Screenshot as well — the geometry check passes on a caution clipped to one

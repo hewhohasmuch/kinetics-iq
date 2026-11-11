@@ -158,24 +158,33 @@ export class MeasureView {
                _renderSelection() at mount, never from this markup. -->
           <div id="selector-drawer" class="selector-drawer">
             <div id="selector-handle" class="selector-handle">
-              <div class="handle-grip"></div>
               <span id="handle-label"></span>
               <div class="handle-chevron">›</div>
             </div>
-            <div class="selector-rows">
-              <div class="seg-group" id="seg-joint">
-                <button class="seg-btn" data-joint="knee">Knee</button>
-                <button class="seg-btn" data-joint="hip">Hip</button>
-                <button class="seg-btn" data-joint="shoulder">Shoulder</button>
-                <button class="seg-btn" data-joint="elbow">Elbow</button>
-                <button class="seg-btn" data-joint="ankle">Ankle</button>
+            <!-- Joint down the left in the order it is picked; Side over
+                 Position on the right. A column grows by a row per joint,
+                 where the old single row ran out of width at five. -->
+            <div class="selector-grid">
+              <div class="sel-col">
+                <div class="sel-heading">Joint</div>
+                <div class="seg-group" id="seg-joint">
+                  <button class="seg-btn" data-joint="knee">Knee</button>
+                  <button class="seg-btn" data-joint="hip">Hip</button>
+                  <button class="seg-btn" data-joint="shoulder">Shoulder</button>
+                  <button class="seg-btn" data-joint="elbow">Elbow</button>
+                  <button class="seg-btn" data-joint="ankle">Ankle</button>
+                </div>
               </div>
-              <div class="seg-group" id="seg-side">
-                <button class="seg-btn" data-side="right">Right</button>
-                <button class="seg-btn" data-side="left">Left</button>
+              <div class="sel-col">
+                <div class="sel-heading">Side</div>
+                <div class="seg-group" id="seg-side">
+                  <button class="seg-btn" data-side="left">Left</button>
+                  <button class="seg-btn" data-side="right">Right</button>
+                </div>
+                <div class="sel-heading">Position</div>
+                <!-- Rebuilt per joint by _renderPositions() -->
+                <div class="seg-group" id="seg-position"></div>
               </div>
-              <!-- Rebuilt per joint by _renderPositions() -->
-              <div class="seg-group" id="seg-position"></div>
             </div>
           </div>
         </div>
@@ -685,7 +694,14 @@ export class MeasureView {
           backdrop-filter: blur(6px);
           -webkit-backdrop-filter: blur(6px);
           border-top: 1px solid rgba(255, 255, 255, 0.08);
-          transform: translateY(calc(100% - 36px));
+          /* Never taller than the camera stack, which clips: on a short phone
+             the open drawer would otherwise push its own handle out of reach.
+             The grid scrolls inside instead. */
+          display: flex;
+          flex-direction: column;
+          max-height: 100%;
+          /* Closed: only the handle shows — its 44px plus the 1px top border. */
+          transform: translateY(calc(100% - 45px));
           transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
@@ -694,20 +710,14 @@ export class MeasureView {
         }
 
         .selector-handle {
-          height: 36px;
+          height: 44px;
+          flex-shrink: 0;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
           cursor: pointer;
           user-select: none;
-        }
-
-        .handle-grip {
-          width: 32px;
-          height: 3px;
-          background: rgba(255, 255, 255, 0.3);
-          border-radius: 2px;
         }
 
         #handle-label {
@@ -719,7 +729,7 @@ export class MeasureView {
 
         .handle-chevron {
           font-size: 16px;
-          color: #555;
+          color: #999;
           transform: rotate(-90deg);
           transition: transform 0.25s;
           line-height: 1;
@@ -729,22 +739,44 @@ export class MeasureView {
           transform: rotate(90deg);
         }
 
-        .selector-rows {
+        .selector-grid {
+          display: grid;
+          grid-template-columns: 1fr 2fr;
+          gap: 20px;
+          padding: 0 12px 12px;
+          min-height: 0;
+          overflow-y: auto;
+        }
+
+        .sel-col {
           display: flex;
           flex-direction: column;
-          gap: 5px;
-          padding: 4px 12px 12px;
+          gap: 6px;
+          min-width: 0;
         }
+
+        .sel-heading {
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: #777;
+        }
+        /* Position's heading sits under the Side buttons, not under another heading. */
+        .seg-group + .sel-heading { margin-top: 16px; }
 
         .seg-group {
-          display: flex;
-          gap: 4px;
+          display: grid;
+          gap: 6px;
         }
+        #seg-side,
+        #seg-position { grid-template-columns: 1fr 1fr; }
 
         .seg-btn {
-          flex: 1;
-          padding: 5px 3px;
-          font-size: 11px;
+          /* 44px is the smallest target a finger hits reliably. */
+          min-height: 44px;
+          padding: 4px 6px;
+          font-size: 14px;
           font-weight: 600;
           background: rgba(255, 255, 255, 0.07);
           color: #888;
@@ -1624,10 +1656,18 @@ export class MeasureView {
    * from rendered button rows and the platform's text size, so a constant would
    * be right on one device and wrong on the next. offsetHeight reads the same
    * open or closed — the drawer only translates.
+   *
+   * Capped so the caution stays inside the stack: on a short phone the drawer
+   * fills most of it, and "clear of the drawer" would be off the top, clipped.
+   * Overlapping the drawer's top edge is the lesser failure.
    */
   _syncPlaneWarningOffset() {
+    const clear   = this._selectorDrawer.offsetHeight + 12
+    // A hidden caution measures 0 tall; allow for two wrapped lines.
+    const caution = this._planeWarning?.offsetHeight || 60
+    const highest = this._cameraStack.clientHeight - caution - 8
     this._cameraStack.style.setProperty(
-      '--plane-warning-bottom', `${this._selectorDrawer.offsetHeight + 12}px`
+      '--plane-warning-bottom', `${Math.max(0, Math.min(clear, highest))}px`
     )
   }
 
@@ -1724,10 +1764,10 @@ export class MeasureView {
         return `<button class="seg-btn${active}" data-position="${p}">${POSITION_NAMES[p]}</button>`
       })
       .join('')
-    // Re-measure: a rebuilt row can change the drawer's height — not between
-    // joints (two entries or three is one flex row either way) but if it wraps
-    // or the platform text scales — and a stale offset would drop the caution
-    // back behind the drawer.
+    // Re-measure: a rebuilt group can change the drawer's height. Today the
+    // joint column is the tallest thing in it, so two position rows or one
+    // make no difference — but enough positions, or larger platform text,
+    // would, and a stale offset drops the caution back behind the drawer.
     if (this._drawerOpen) this._syncPlaneWarningOffset()
   }
 
