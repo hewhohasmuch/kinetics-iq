@@ -240,6 +240,20 @@ export class Overlay {
     this._videoH   = 0
     // Sub-rect of the video the display shows; null until resize() runs.
     this._visible  = null
+    // Draw as a mirror image, to sit on a CSS-flipped front-camera preview.
+    this._mirrored = false
+  }
+
+  /**
+   * Mirror the drawing left-to-right, for the front camera's selfie preview.
+   *
+   * DISPLAY ONLY. The points handed to draw() stay in true, unflipped video
+   * space — the same ones the angle, the stored landmarks and the snapshot use
+   * — and only their x on screen is reflected. The canvas itself is not
+   * flipped, so the angle label and hints still read left to right.
+   */
+  setMirrored(mirrored) {
+    this._mirrored = !!mirrored
   }
 
   attach(canvasElement) {
@@ -322,8 +336,11 @@ export class Overlay {
    * Apply this to every marker coordinate before drawing.
    */
   _toDisplay(pt) {
+    const x = pt.x * this._scale + this._offsetX
     return {
-      x: pt.x * this._scale + this._offsetX,
+      // The cover crop is centred, so reflecting about the display's width is
+      // exactly what `transform: scaleX(-1)` does to the video underneath.
+      x: this._mirrored ? this.canvas.clientWidth - x : x,
       y: pt.y * this._scale + this._offsetY,
     }
   }

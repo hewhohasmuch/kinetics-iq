@@ -92,10 +92,17 @@ export class CalibrationManager {
    * about another. Call before reading `offset`/`isCalibrated` for a session,
    * and again whenever the patient, joint or side changes.
    *
-   * @param {{patientId: string|null, joint: string, side: string}} context
+   * `camera` is which camera the stream is confirmed to come from ('user',
+   * 'environment' or 'unknown'), and null while no stream is running — the
+   * view mounts before the camera starts. A zero is kept across that gap and
+   * judged once the camera is known: switching cameras changes the viewpoint,
+   * so a zero captured through the other one is cleared like one captured on
+   * another limb. Call again after every camera start.
+   *
+   * @param {{patientId: string|null, joint: string, side: string, camera?: string|null}} context
    */
-  setContext({ patientId, joint, side }) {
-    this._context = { patientId: patientId ?? null, joint, side }
+  setContext({ patientId, joint, side, camera = null }) {
+    this._context = { patientId: patientId ?? null, joint, side, camera: camera ?? null }
     if (this._captured && !sameContext(this._capturedContext, this._context)) {
       this.clear()
     }
@@ -223,7 +230,13 @@ export class CalibrationManager {
   }
 }
 
-function sameContext(a, b) {
-  return !!a && !!b &&
-    a.patientId === b.patientId && a.joint === b.joint && a.side === b.side
+// `captured` is the context a zero was taken in; `current` is what is being
+// measured now. The camera is compared only once the current one is known. A
+// zero stored before cameras were recorded has none, so it stops matching the
+// first time a camera starts and is discarded once.
+function sameContext(captured, current) {
+  return !!captured && !!current &&
+    captured.patientId === current.patientId &&
+    captured.joint === current.joint && captured.side === current.side &&
+    (current.camera == null || captured.camera === current.camera)
 }

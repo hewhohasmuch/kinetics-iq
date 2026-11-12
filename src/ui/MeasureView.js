@@ -2,14 +2,15 @@
  * MeasureView.js — Milestone 2 + Calibration
  */
 
-import { Camera }            from '../detection/camera.js'
+import { Camera, CAMERA_START_SUPERSEDED } from '../detection/camera.js'
 import { getPoseDetector }   from '../detection/pose.js'
 import { Overlay }           from '../detection/overlay.js'
 import { jointAngle, toClinicalAngle, toInteriorAngle, motionTerms, MedianFilter3, OneEuroFilter } from '../core/angle.js'
 import { JOINT_NAMES, POSITION_NAMES, positionsFor, sideLabel } from '../core/labels.js'
 import { SessionRecorder }   from '../core/session.js'
 import { saveSession, getActivePatientId, getPatient, enqueueImageUpload,
-         loadMeasureSelection, saveMeasureSelection } from '../core/storage.js'
+         loadMeasureSelection, saveMeasureSelection,
+         loadSettings, saveSettings } from '../core/storage.js'
 import { restoreSelection }  from '../core/selection.js'
 import { CalibrationManager } from '../core/calibration.js'
 import { isConfigured }      from '../core/supabase.js'
@@ -83,6 +84,19 @@ export class MeasureView {
     this._pendingSession = null  // holds session between stop() and note entry
     this._discardedTake  = null  // { session, note } after Retake, until Undo or final
     this._unsubSync      = null
+
+    // Which camera the next start asks for ('environment' = rear, 'user' =
+    // front). A REQUEST: what the stream actually is lives in _activeFacing.
+    this._facing        = loadSettings().camera_facing === 'user' ? 'user' : 'environment'
+    // The camera the live stream is CONFIRMED to come from ('user',
+    // 'environment' or 'unknown'); null while no stream runs. Mirroring, the
+    // calibration context and the session stamp read this, never _facing.
+    this._activeFacing  = null
+    this._cameraBusy    = false  // a start or switch is in flight
+    this._cameraOp      = 0      // bumped by every start and stop; stale ones bail
+    // Record and Set Zero stay hidden until the new stream has produced one
+    // detection tick, so nothing is measured across a camera change.
+    this._awaitingFirstTick = false
   }
 
   mount() {
@@ -98,6 +112,7 @@ export class MeasureView {
     // joint or side must not be applied to this one.
     this._syncCalibrationContext()
     this._updateCalibrationUI()
+    this._updateFlipButton()
     this._updatePatientChip()
     this._updateStorageGauge()
     if (isConfigured()) {
@@ -131,6 +146,10 @@ export class MeasureView {
           <video id="rom-video" class="camera-video" playsinline muted autoplay></video>
           <canvas id="rom-overlay" class="camera-overlay"></canvas>
           <div id="status-badge" class="status-badge status-idle">Tap to start</div>
+
+          <!-- Front/rear camera switch. Label and state come from
+               _updateFlipButton(); hidden while a take records. -->
+          <button id="btn-flip-camera" class="flip-camera" type="button"></button>
 
           <!-- Active patient chip + sync indicator -->
           <button id="patient-chip" class="patient-chip">
@@ -304,6 +323,27 @@ export class MeasureView {
         .camera-stack.drawer-open .plane-warning {
           bottom: var(--plane-warning-bottom, 96px);
         }
+
+        /* Front camera: a selfie view. DISPLAY ONLY — frames read from the
+           video are never flipped, so detection, snapshots and left/right are
+           unaffected. The overlay mirrors its own x to match (Overlay.setMirrored). */
+        .camera-video.mirrored { transform: scaleX(-1); }
+
+        .flip-camera {
+          position: absolute;
+          top: 46px; left: 12px;
+          min-width: 44px;
+          min-height: 44px;
+          padding: 0 12px;
+          background: rgba(0,0,0,0.55);
+          border: 1px solid rgba(255,255,255,0.15);
+          border-radius: 22px;
+          color: #f0f0f0;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .flip-camera:disabled { opacity: 0.45; cursor: default; }
 
         .camera-overlay {
           position: absolute;
@@ -809,6 +849,7 @@ export class MeasureView {
     this._calBar         = document.getElementById('cal-bar')
     this._btnStart       = document.getElementById('btn-start-camera')
     this._btnStop        = document.getElementById('btn-stop-camera')
+    this._btnFlip        = document.getElementById('btn-flip-camera')
     this._cameraControls = document.getElementById('camera-controls')
     this._activeControls = document.getElementById('active-controls')
     this._btnCalibrate   = document.getElementById('btn-calibrate')
@@ -859,6 +900,7 @@ export class MeasureView {
       if (this.recorder.isActive) this._stopRecording()
       this._stopCamera()
     })
+    this._btnFlip.addEventListener('click',        () => this._flipCamera())
     this._btnCalibrate.addEventListener('click',   () => this._handleCalibrateBtn())
     this._btnRecordStart.addEventListener('click', () => this._startRecording())
     this._btnRecordStop.addEventListener('click',  () => this._stopRecording())
@@ -879,7 +921,9 @@ export class MeasureView {
     const leave = async (go) => {
       if (this._leaving) return            // a second tap while the save runs
       this._leaving = true
-      const cameraWasRunning = this.camera.isRunning
+      // A start or switch still in flight counts: the clinician asked for the
+      // camera, and leaving mid-switch should not come back to it stopped.
+      const cameraWasRunning = this.camera.isRunning || this._cameraBusy
       // A take the clinician chose to discard stays discarded: leaving is
       // moving on, not a request to save it.
       this._finaliseDiscard()
@@ -916,36 +960,80 @@ export class MeasureView {
   // ─── Camera lifecycle ────────────────────────────────────────────────
 
   /**
+   * Start the camera `this._facing` asks for. The one path every start takes:
+   * Start Camera, the auto-resume and a camera switch.
+   *
+   * ONE AT A TIME. A second call while one is in flight returns 'busy', so
+   * quick taps cannot open two streams. Each run also holds a token, and after
+   * every await gives up quietly ('stale') if a stop, a leave or an unmount
+   * overtook it — Camera.start() closes the stream it was handed in that case.
+   *
    * @param {object}  [opts]
    * @param {boolean} [opts.auto] - started by mount() rather than a tap. iOS
    *   may refuse getUserMedia without a gesture; then the view quietly stays
    *   at "Tap to start" instead of showing an error for a start the clinician
    *   never asked for.
+   * @param {boolean} [opts.fallback] - when the front camera cannot start, use
+   *   the rear one instead. True for Start Camera and the auto-resume, where
+   *   the front camera is only a remembered preference; false for an explicit
+   *   switch, which reports the failure and goes back (see _flipCamera).
+   * @param {boolean} [opts.keepError] - leave the error line as it is.
+   * @returns {Promise<'ok'|'failed'|'stale'|'busy'>}
    */
-  async _startCamera({ auto = false } = {}) {
+  async _startCamera({ auto = false, fallback = true, keepError = false } = {}) {
+    if (this._cameraBusy) return 'busy'
+    this._cameraBusy = true
+    const op        = ++this._cameraOp
+    const requested = this._facing
+    const stale     = () => this._unmounted || op !== this._cameraOp
+
     this._btnStart.disabled = true
-    this._hideError()
+    this._updateFlipButton()
+    if (!keepError) this._hideError()
     this._setStatus('idle', 'Starting…')
 
     try {
-      const { width, height } = await this.camera.start()
+      const { width, height, facing } = await this.camera.start({ facing: requested })
       // Left mid-start (the patient chip is live while the camera starts, and
       // an auto-start begins with no tap at all): don't leave the camera on
       // behind a view that is gone.
-      if (this._unmounted) { this.camera.stop(); return }
+      if (this._unmounted) { this.camera.stop(); return 'stale' }
+      if (stale()) return 'stale'
+      this._applyActiveCamera(facing, requested)
       this.overlay.resize(width, height)
 
       // Usually already loaded: main.js warms the shared detector at login.
       if (!this.detector.isReady) this._setStatus('idle', 'Loading AI model…')
       await this.detector.init()
-      if (this._unmounted) { this.camera.stop(); return }
+      if (this._unmounted) { this.camera.stop(); return 'stale' }
+      if (stale()) return 'stale'
 
       this._btnStart.style.display          = 'none'
       this._btnStop.style.display           = 'block'
-      this._activeControls.style.display    = 'flex'
+      // Record and Set Zero appear after the first detection on this stream
+      // (see _runDetection), not here.
+      this._awaitingFirstTick = true
       this._setStatus('running', 'Detecting pose…')
       this._startLoop()
+      return 'ok'
     } catch (err) {
+      // Overtaken by a stop or a leave: that path already put the view in the
+      // state it wants, so touch nothing.
+      if (stale() || err?.message === CAMERA_START_SUPERSEDED) return 'stale'
+
+      if (requested === 'user' && fallback) {
+        // The front camera was only a remembered preference. Use the rear one
+        // rather than leave Start Camera failing until it is switched back.
+        this._facing = 'environment'
+        saveSettings({ camera_facing: 'environment' })
+        this._cameraBusy = false
+        const result = await this._startCamera({ auto, fallback: false })
+        if (result === 'ok' && !auto) {
+          this._showSaveFeedback('Front camera not available — using the rear camera')
+        }
+        return result
+      }
+
       if (auto) {
         this.camera.stop()
         this._setStatus('idle', 'Tap to start')
@@ -954,6 +1042,96 @@ export class MeasureView {
         this._setStatus('error', 'Error')
       }
       this._btnStart.disabled = false
+      return 'failed'
+    } finally {
+      this._cameraBusy = false
+      if (!this._unmounted) this._updateFlipButton()
+    }
+  }
+
+  /**
+   * Take in which camera the stream that just started is CONFIRMED to be.
+   *
+   * Everything that depends on the camera reads the confirmed value: the
+   * mirrored preview (front only — an unidentified camera is never mirrored),
+   * the calibration context and, at Record, the session stamp. The request is
+   * used for nothing but deciding whether to remember it.
+   *
+   * @param {'user'|'environment'|'unknown'} facing    - what the track reported
+   * @param {'user'|'environment'}           requested - what was asked for
+   */
+  _applyActiveCamera(facing, requested) {
+    this._activeFacing = facing
+    const mirrored = facing === 'user'
+    this._video.classList.toggle('mirrored', mirrored)
+    this.overlay.setMirrored(mirrored)
+
+    // Remember a camera only once a stream is confirmed to come from it. A
+    // stream confirmed as the OTHER camera corrects the request too, so the
+    // switch button never names a camera that is not the one running.
+    if (facing === 'user' || facing === 'environment') {
+      this._facing = facing
+      saveSettings({ camera_facing: facing })
+    }
+
+    // A zero captured through another camera was taken from another
+    // viewpoint. The context drops it (CalibrationManager.setContext).
+    const wasZeroed = this.calibration.isCalibrated
+    this._syncCalibrationContext()
+    this._updateCalibrationUI()
+    if (wasZeroed && !this.calibration.isCalibrated) {
+      this._showSaveFeedback('Zero cleared — set it again for this camera')
+    }
+    this._updateFlipButton()
+  }
+
+  /** May the camera be switched right now? One take is always one camera. */
+  _canFlip() {
+    return !this._cameraBusy && !this.recorder.isActive && !this.calibration.isSampling &&
+           !this._pendingSession && !this._saving && !this._leaving
+  }
+
+  /** Paint the switch: which camera it names, and whether it can be tapped. */
+  _updateFlipButton() {
+    if (!this._btnFlip) return
+    // While a stream runs, name the camera it is confirmed to be; otherwise
+    // the one the next start will ask for.
+    const shown = this._activeFacing ?? this._facing
+    const name  = shown === 'user' ? 'Front' : shown === 'environment' ? 'Rear' : 'Camera'
+    this._btnFlip.textContent = `⇄ ${name}`
+    this._btnFlip.setAttribute('aria-label', `Switch camera (now: ${name.toLowerCase()})`)
+    this._btnFlip.dataset.facing = shown
+    this._btnFlip.style.display = this.recorder.isActive ? 'none' : ''
+    this._btnFlip.disabled      = !this._canFlip()
+  }
+
+  /**
+   * Switch between the rear and front camera.
+   *
+   * With the camera off this only changes what Start Camera will ask for.
+   * With it running, the stream is fully stopped first (which also clears the
+   * overlay, the filters and the readout — nothing from the old viewpoint
+   * carries over) and the other camera started in the same tap, as iOS needs.
+   *
+   * A switch that fails says so and goes back to the camera that was working.
+   */
+  async _flipCamera() {
+    if (!this._canFlip()) return
+    const previous = this._facing
+    this._facing   = previous === 'user' ? 'environment' : 'user'
+    this._updateFlipButton()
+    if (!this.camera.isRunning) return
+
+    this._stopCamera()
+    const result = await this._startCamera({ fallback: false })
+    if (result !== 'failed') return
+
+    // The error stays on screen; the previous camera comes back under it.
+    this._facing = previous
+    const restored = await this._startCamera({ fallback: false, keepError: true })
+    if (restored === 'failed') {
+      // Neither camera starts. Left at Start Camera with the first error shown.
+      this._setStatus('idle', 'Tap to start')
     }
   }
 
@@ -961,11 +1139,16 @@ export class MeasureView {
     if (this.recorder.isActive)    this.recorder.stop()
     if (this.calibration.isSampling) this.calibration.cancel()
 
+    this._cameraOp++               // a start still in flight gives up
+    this._awaitingFirstTick = false
+    this._activeFacing      = null
     this._stopLoop()
     this.camera.stop()
     this.overlay.clear()
     this.median.reset()
     this.euro.reset()
+    this.currentAngle = null
+    this._updatePlaneWarning(null)
 
     this._btnStop.style.display           = 'none'
     this._btnStart.style.display          = 'block'
@@ -978,6 +1161,7 @@ export class MeasureView {
     this._angleDisplay.className        = 'angle-display'
     this._setStatus('idle', 'Tap to start')
     this._updateAngleDisplay(null)
+    this._updateFlipButton()
   }
 
   // ─── Calibration ─────────────────────────────────────────────────────
@@ -1007,6 +1191,7 @@ export class MeasureView {
     this._calProgress.style.display = 'block'
     this._angleDisplay.classList.add('sampling')
     this._setStatus('cal', 'Hold still…')
+    this._updateFlipButton()
   }
 
   _endCalibrationUI() {
@@ -1016,6 +1201,7 @@ export class MeasureView {
     this._calProgress.style.display = 'none'
     this._angleDisplay.classList.remove('sampling')
     this._setStatus('running', 'Detecting pose…')
+    this._updateFlipButton()
   }
 
   _updateCalibrationUI() {
@@ -1069,6 +1255,9 @@ export class MeasureView {
     // (below), so the offset cannot move mid-session.
     this.recorder.setCalibration(this.calibration.offset, this.calibration.isCalibrated)
     this.recorder.setModel(MODEL_ID, MODEL_VERSION)
+    // The camera the live stream is confirmed to be, never the one asked for.
+    // Safe to read at start: the switch is hidden for the whole recording.
+    this.recorder.setCamera(this._activeFacing)
     this.recorder.start()
     this._maxAngle    = -Infinity
     this._minAngle    = Infinity
@@ -1086,6 +1275,7 @@ export class MeasureView {
     this._angleDisplay.classList.add('recording')
     this._hideSaveFeedback()
     this._setStatus('recording', '● Recording')
+    this._updateFlipButton()
   }
 
   _stopRecording() {
@@ -1097,6 +1287,7 @@ export class MeasureView {
     this._btnCalibrate.disabled        = false
     this._angleDisplay.classList.remove('recording')
     this._setStatus('running', 'Detecting pose…')
+    this._updateFlipButton()
 
     if (!session) {
       this._showError('No angle data recorded — make sure the selected joint is clearly visible.')
@@ -1113,6 +1304,7 @@ export class MeasureView {
   _showNotesPanel(note = '') {
     this._notesInput.value        = note
     this._notesPanel.style.display = 'block'
+    this._updateFlipButton()
     // Small delay so the keyboard doesn't open immediately on mobile
     setTimeout(() => this._notesInput.focus(), 300)
   }
@@ -1121,6 +1313,7 @@ export class MeasureView {
     this._notesPanel.style.display = 'none'
     this._notesInput.value         = ''
     this._notesInput.blur()
+    this._updateFlipButton()
   }
 
   /**
@@ -1179,8 +1372,12 @@ export class MeasureView {
   /** Save the held take. Tracked in `_saving` so _flushPendingSession() can wait for it. */
   _saveWithNote(forceNote) {
     const saving = this._commitPendingSession(forceNote)
-      .finally(() => { if (this._saving === saving) this._saving = null })
+      .finally(() => {
+        if (this._saving === saving) this._saving = null
+        if (!this._unmounted) this._updateFlipButton()
+      })
     this._saving = saving
+    this._updateFlipButton()
     return saving
   }
 
@@ -1401,6 +1598,18 @@ export class MeasureView {
     // ── UI ─────────────────────────────────────────────────────────
     this._updateAngleDisplay(displayAngle)
     this._updateStatus(allFound, Object.keys(markers).length)
+
+    // ── First tick on a new stream ─────────────────────────────────
+    // The landmarker tracks from the previous frame, so the first result after
+    // a camera change can still lean on the old viewpoint. It is shown but not
+    // kept: the filters restart from the next tick, and only now do Record and
+    // Set Zero appear.
+    if (this._awaitingFirstTick) {
+      this._awaitingFirstTick = false
+      this.median.reset()
+      this.euro.reset()
+      this._activeControls.style.display = 'flex'
+    }
   }
 
   // ─── UI updates ──────────────────────────────────────────────────────
@@ -1711,12 +1920,14 @@ export class MeasureView {
   }
 
   /** Tell the calibration what is being measured; it drops a zero captured
-   *  for any other patient, joint or side. */
+   *  for any other patient, joint or side, or through the other camera. */
   _syncCalibrationContext() {
     this.calibration.setContext({
       patientId: getActivePatientId(),
       joint:     this._joint,
       side:      this._side,
+      // null while no stream runs; the zero is then judged at the next start.
+      camera:    this._activeFacing,
     })
   }
 

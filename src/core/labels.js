@@ -153,6 +153,27 @@ export function positionLabel(position) {
 }
 
 /**
+ * Which camera took a session, for display: "Front", "Rear", "Not identified"
+ * or "Not applicable".
+ *
+ * "Not applicable" is for a session with no `cameraFacing` at all — one saved
+ * before the camera was recorded, when the rear camera was the only one the
+ * app requested. "Not identified" is a different claim: a build that records
+ * the camera saved the session, and the device did not say which camera it
+ * was. A value this function does not recognise also reads "Not identified",
+ * never "Not applicable": it must not pass for an ordinary older session.
+ *
+ * @param {string|null|undefined} facing - a session's `cameraFacing`
+ * @returns {string}
+ */
+export function cameraLabel(facing) {
+  if (facing === null || facing === undefined) return 'Not applicable'
+  if (facing === 'user')        return 'Front'
+  if (facing === 'environment') return 'Rear'
+  return 'Not identified'
+}
+
+/**
  * "Flexion" / "Elevation" / "Dorsiflexion" — the positive motion, capitalised,
  * for a chart axis title.
  *

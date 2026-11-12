@@ -243,6 +243,66 @@ describe('CalibrationManager', () => {
     expect(next.isCalibrated).toBe(true)
   })
 
+  // ─── The camera is part of the context ──────────────────────────────
+  //
+  // Switching between the rear and front camera changes the viewpoint, so a
+  // zero taken through one says nothing about the other. The view mounts
+  // before any camera runs, so "no camera yet" must not drop anything.
+
+  const REAR  = { ...LEFT_HIP, camera: 'environment' }
+  const FRONT = { ...LEFT_HIP, camera: 'user' }
+
+  it('keeps a zero when the same camera starts again', () => {
+    const c = storedOffset(REAR)
+    c.setContext({ ...REAR })
+    expect(c.isCalibrated).toBe(true)
+  })
+
+  it('drops a zero captured through the other camera', () => {
+    const c = storedOffset(REAR)
+    c.setContext(FRONT)
+    expect(c.isCalibrated).toBe(false)
+    expect(c.apply(20)).toBe(20)
+  })
+
+  it('keeps a zero while no camera is running, then judges it at the start', () => {
+    const c = storedOffset(REAR)
+    c.setContext(LEFT_HIP)                       // mount: camera not started
+    expect(c.isCalibrated).toBe(true)
+    c.setContext({ ...LEFT_HIP, camera: null })  // camera stopped
+    expect(c.isCalibrated).toBe(true)
+    c.setContext(FRONT)                          // a different camera starts
+    expect(c.isCalibrated).toBe(false)
+  })
+
+  it('drops a zero stored before cameras were recorded, once a camera starts', () => {
+    const c = storedOffset(LEFT_HIP)             // no camera in the stored context
+    c.setContext(LEFT_HIP)
+    expect(c.isCalibrated).toBe(true)
+    c.setContext(REAR)
+    expect(c.isCalibrated).toBe(false)
+  })
+
+  it('an unidentified camera matches itself, and no identified one', () => {
+    const unknown = { ...LEFT_HIP, camera: 'unknown' }
+    const same = storedOffset(unknown)
+    same.setContext({ ...unknown })
+    expect(same.isCalibrated).toBe(true)
+
+    const other = storedOffset(unknown)
+    other.setContext(REAR)
+    expect(other.isCalibrated).toBe(false)
+  })
+
+  it('stores the camera with a captured zero', async () => {
+    const { saveSettings } = await import('./storage.js')
+    saveSettings.mockClear()
+    cal.setContext(FRONT)
+    cal.startSampling(() => {})
+    for (let i = 0; i < 20; i++) cal.addSample(12.5)
+    expect(saveSettings.mock.calls.at(-1)[0].calibration_context).toEqual(FRONT)
+  })
+
   it('a null patient is a context like any other', () => {
     const c = storedOffset({ ...RIGHT_KNEE, patientId: null })
     c.setContext({ ...RIGHT_KNEE, patientId: undefined })

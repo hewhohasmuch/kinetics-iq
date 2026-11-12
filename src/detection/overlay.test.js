@@ -224,3 +224,85 @@ describe('Overlay.visibleVideoRect — the crop the snapshot will store', () => 
     expect(o.visibleVideoRect(1280, 720)).not.toBeNull()
   })
 })
+
+// ─── The mirrored (front camera) preview ─────────────────────────────────────
+//
+// The front camera's preview is flipped with CSS so it behaves like a mirror.
+// The overlay must land on that flipped picture, while the points it is given
+// stay in true video space — they are the ones the angle and the stored
+// landmarks use. So only the on-screen x changes.
+
+describe('Overlay.setMirrored — display only', () => {
+
+  function attachedOverlay(displayW, displayH) {
+    const ctx = { ...fakeCtx(), setTransform: () => {}, clearRect: () => {} }
+    const canvas = {
+      clientWidth: displayW, clientHeight: displayH, width: 0, height: 0,
+      getContext: () => ctx,
+    }
+    globalThis.window = globalThis.window || {}
+    globalThis.window.devicePixelRatio = 2
+    const o = new Overlay()
+    o.attach(canvas)
+    return o
+  }
+
+  it.each([
+    ['portrait display, landscape stream', 430, 700, 1280, 720],
+    ['landscape display, landscape stream', 900, 400, 1280, 720],
+    ['portrait display, portrait stream',  430, 700, 720, 1280],
+  ])('reflects x about the display centre: %s', (_, dw, dh, vw, vh) => {
+    const o = attachedOverlay(dw, dh)
+    o.resize(vw, vh)
+    const pt = { x: vw * 0.3, y: vh * 0.6 }
+    const plain = o._toDisplay(pt)
+
+    o.setMirrored(true)
+    const mirrored = o._toDisplay(pt)
+
+    expect(mirrored.x).toBeCloseTo(dw - plain.x, 9)
+    expect(mirrored.y).toBe(plain.y)
+  })
+
+  it('puts the video centre in the same place either way', () => {
+    const o = attachedOverlay(430, 700)
+    o.resize(1280, 720)
+    o.setMirrored(true)
+    expect(o._toDisplay({ x: 640, y: 360 }).x).toBeCloseTo(215, 9)
+  })
+
+  it('is off by default and can be switched back off', () => {
+    const o = attachedOverlay(430, 700)
+    o.resize(1280, 720)
+    const pt = { x: 300, y: 200 }
+    const plain = o._toDisplay(pt)
+    o.setMirrored(true)
+    o.setMirrored(false)
+    expect(o._toDisplay(pt)).toEqual(plain)
+  })
+
+  it('does not change the crop a snapshot stores', () => {
+    const o = attachedOverlay(430, 700)
+    o.resize(1280, 720)
+    const before = o.visibleVideoRect()
+    o.setMirrored(true)
+    o.resize(1280, 720)
+    expect(o.visibleVideoRect()).toEqual(before)
+  })
+
+  it('draws the label unflipped, beside the mirrored joint', () => {
+    const o = attachedOverlay(430, 700)
+    o.resize(1280, 720)
+    o.setMirrored(true)
+    const markers = {
+      proximal: { center: { x: 500, y: 200 }, visibility: 1 },
+      joint:    { center: { x: 600, y: 360 }, visibility: 1 },
+      distal:   { center: { x: 700, y: 200 }, visibility: 1 },
+    }
+    o.draw(markers, 90, { labelAngle: 42 })
+    const text = o.ctx.calls.find(c => c[0] === 'fillText')
+    expect(text[1]).toBe('42°')
+    // To the right of where the mirrored joint is drawn, as on the rear camera.
+    expect(text[2]).toBeGreaterThan(o._toDisplay(markers.joint.center).x)
+  })
+})

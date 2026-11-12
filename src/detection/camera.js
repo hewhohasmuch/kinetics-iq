@@ -4,7 +4,9 @@
  * Manages the device camera stream for iPhone Safari.
  *
  * Key Safari/iOS quirks handled here:
- *  1. Must request the REAR camera via facingMode: 'environment'
+ *  1. The rear camera is the default (facingMode: 'environment'); the
+ *     front one ('user') is asked for only when the clinician switches.
+ *     start() reports which camera the stream is CONFIRMED to come from.
  *  2. Requires HTTPS — will silently fail on HTTP
  *  3. iOS requires a user gesture before calling getUserMedia
  *     (we satisfy this via the "Start Camera" button in the UI)
@@ -15,11 +17,35 @@
  *     never assume the requested ones.
  */
 
+/** Message of the error start() throws when a later start() or stop() overtook it. */
+export const CAMERA_START_SUPERSEDED = 'Camera start superseded'
+
+/**
+ * Which camera a running stream comes from, as the browser REPORTS it:
+ * 'user' (front), 'environment' (rear), or 'unknown' when it does not say
+ * (most desktop webcams). The requested direction is deliberately not an
+ * input: a request is a preference the browser may not honour, and treating
+ * it as confirmation would mirror and label a rear-camera stream as front.
+ *
+ * @param {MediaStream} stream
+ * @returns {'user'|'environment'|'unknown'}
+ */
+export function confirmedFacing(stream) {
+  let reported
+  try {
+    reported = stream?.getVideoTracks?.()[0]?.getSettings?.().facingMode
+  } catch {
+    reported = undefined
+  }
+  return reported === 'user' || reported === 'environment' ? reported : 'unknown'
+}
+
 export class Camera {
   constructor() {
     this.videoEl = null       // the <video> DOM element
     this.stream = null        // MediaStream from getUserMedia
     this.isRunning = false
+    this._op = 0              // bumped by every start() and stop()
   }
 
   /**
@@ -39,17 +65,19 @@ export class Camera {
    * (e.g. a button click) — not automatically on page load.
    * iOS will silently deny automatic camera access.
    */
-  async start() {
+  async start({ facing = 'environment' } = {}) {
     if (!this.videoEl) {
       throw new Error('Camera not attached to a video element. Call attach() first.')
     }
 
-    // Constraints: rear camera, 720p preferred.
-    // 'ideal' means "try for this, but don't fail if unavailable".
-    // We do NOT use 'exact' because that causes hard failures on some devices.
+    // The rear camera is requested with 'ideal' ("try for this, but don't fail
+    // if unavailable"), so a laptop with one webcam still starts. The front
+    // camera is requested with 'exact': it is only ever asked for by an
+    // explicit switch, and silently getting a different camera there is worse
+    // than a clear "not available".
     const constraints = {
       video: {
-        facingMode: { ideal: 'environment' },   // rear camera
+        facingMode: facing === 'user' ? { exact: 'user' } : { ideal: 'environment' },
         width:  { ideal: 1280 },
         height: { ideal: 720 },
         frameRate: { ideal: 30, max: 60 },
@@ -57,26 +85,55 @@ export class Camera {
       audio: false
     }
 
+    // A stream is owned by the start() that asked for it. A second start()
+    // (or a stop()) while this one is still waiting bumps the counter, and
+    // this one then closes the stream it got instead of installing it —
+    // otherwise two quick switches could leave a camera running that nothing
+    // holds a reference to.
+    const op = ++this._op
+
+    let stream
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia(constraints)
+      stream = await navigator.mediaDevices.getUserMedia(constraints)
     } catch (err) {
       // Translate browser error codes into readable messages
-      throw new Error(this._friendlyError(err))
+      throw new Error(
+        facing === 'user' && err?.name === 'OverconstrainedError'
+          ? 'This device has no front camera available.'
+          : this._friendlyError(err)
+      )
+    }
+    if (op !== this._op) {
+      stream.getTracks().forEach(track => track.stop())
+      throw new Error(CAMERA_START_SUPERSEDED)
     }
 
     // Wire the stream to the video element
-    this.videoEl.srcObject = this.stream
+    this.stream = stream
+    this.videoEl.srcObject = stream
 
     // Wait for the video to actually be playing before we return.
     // This is important: if we try to capture frames before 'playing',
     // we get blank black frames.
-    await this._waitForPlaying()
+    try {
+      await this._waitForPlaying()
+    } catch (err) {
+      // Never leave a camera on behind a start that failed.
+      if (op === this._op) this.stop()
+      else stream.getTracks().forEach(track => track.stop())
+      throw err
+    }
+    if (op !== this._op) {
+      stream.getTracks().forEach(track => track.stop())
+      throw new Error(CAMERA_START_SUPERSEDED)
+    }
 
     this.isRunning = true
 
     return {
       width:  this.videoEl.videoWidth,
       height: this.videoEl.videoHeight,
+      facing: confirmedFacing(stream),
     }
   }
 
@@ -86,6 +143,7 @@ export class Camera {
    * On iOS, not releasing the camera keeps the green dot in the status bar.
    */
   stop() {
+    this._op++   // a start() still in flight must not install its stream
     if (this.stream) {
       this.stream.getTracks().forEach(track => track.stop())
       this.stream = null
@@ -120,9 +178,9 @@ export class Camera {
 
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
 
-    // Note: we do NOT mirror the image here.
-    // The rear camera on iPhone should already be correct orientation.
-    // If you were using the front camera you'd need: ctx.scale(-1, 1)
+    // Never mirrored, for either camera. The front camera's selfie view is a
+    // CSS transform on the preview only; pixels read from the video are the
+    // true image, which keeps MediaPipe's left and right correct.
     ctx.drawImage(this.videoEl, 0, 0, w, h)
 
     return ctx.getImageData(0, 0, w, h)

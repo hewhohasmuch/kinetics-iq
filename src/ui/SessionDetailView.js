@@ -21,7 +21,7 @@
 import { deleteSession, saveSession } from '../core/storage.js'
 import { SessionRecorder } from '../core/session.js'
 import {
-  extremeLabels, jointLabel, positionLabel, romArc, motionLabel,
+  extremeLabels, jointLabel, positionLabel, romArc, motionLabel, cameraLabel,
   formatSessionDate, formatSessionTime, formatDuration,
 } from '../core/labels.js'
 import { sessionProvenance, calibrationSummary, extensionFloorCaveat, verificationSummary } from '../core/provenance.js'
@@ -169,6 +169,10 @@ export class SessionDetailView {
         `<span class="prov-chip verified" title="${ver.detail} ${ver.attribution ?? ''}">✓ ${ver.label}</span>`
       )
     }
+
+    // Which camera took the bout. Shown on every session, as a plain fact:
+    // an older session reads "Not applicable" rather than leaving a gap.
+    parts.push(`<span class="prov-chip" id="detail-camera">Camera: ${cameraLabel(s.cameraFacing)}</span>`)
 
     const prov = sessionProvenance(s)
     if (prov.level !== 'ok') {

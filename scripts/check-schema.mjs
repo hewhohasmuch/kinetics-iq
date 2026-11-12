@@ -33,7 +33,7 @@ const EXPECTED = [
   'id', 'patient_id', 'measured_at', 'date', 'joint', 'side', 'position',
   'min', 'max', 'rom', 'duration_s', 'samples', 'angle_timeline',
   'angle_mode', 'angle_filter', 'angle_convention',
-  'calibrated', 'calibration_offset', 'max_segment_tilt',
+  'calibrated', 'calibration_offset', 'max_segment_tilt', 'camera_facing',
   'landmark_space', 'model_id', 'model_version', 'landmarks_raw',
   'frame_angle_raw_max', 'frame_angle_raw_min',
   'frame_tilt_max', 'frame_tilt_min', 'verifications',
