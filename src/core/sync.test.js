@@ -467,6 +467,43 @@ describe('shape mapping', () => {
     expect(back.maxSegmentTilt).toBe(0)
   })
 
+  // ─── Which camera took the bout ──────────────────────────────────────
+  //
+  // Each direction separately, like every stamp above. The extra rule here is
+  // on the push: a device that does not have the value must not send "empty"
+  // over one another device recorded.
+
+  it.each(['user', 'environment', 'unknown'])('pushes a %s camera', (facing) => {
+    expect(sessionToRow({ ...makeSession(), cameraFacing: facing }).camera_facing).toBe(facing)
+  })
+
+  it('OMITS the column when this device has no camera value', () => {
+    const { cameraFacing, ...withoutCamera } = makeSession()
+    expect('camera_facing' in sessionToRow(withoutCamera)).toBe(false)
+    expect('camera_facing' in sessionToRow({ ...withoutCamera, cameraFacing: null })).toBe(false)
+  })
+
+  it('reads the camera back off a row', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      camera_facing: 'user', updated_at: new Date(0).toISOString(),
+    })
+    expect(back.cameraFacing).toBe('user')
+  })
+
+  it('reads a null column back as absent, not as unknown', () => {
+    const back = rowToSession({
+      id: 'x', patient_id: 'p', measured_at: 1, date: '2026-07-11',
+      camera_facing: null, updated_at: new Date(0).toISOString(),
+    })
+    expect(back.cameraFacing).toBeUndefined()
+  })
+
+  it('round-trips the camera so a pull cannot turn a front session into an older one', () => {
+    const back = rowToSession(sessionToRow({ ...makeSession(), cameraFacing: 'user' }))
+    expect(back.cameraFacing).toBe('user')
+  })
+
   // ─── Calibration provenance ──────────────────────────────────────────
   //
   // Whether a session was zeroed, and by how much, is only knowable from these
@@ -687,6 +724,34 @@ describe('schema mismatch (code deployed ahead of its migration)', () => {
     expect(storage.removeOp).toHaveBeenCalledWith('op1')
     expect(getStatus().schemaMismatch).toBe(false)
     warn.mockRestore()
+  })
+
+  it('keeps a session queued before migration 0007, and uploads it after', async () => {
+    // The camera column is the newest one. Deployed ahead of its migration, a
+    // session must wait in the outbox, then go up with its camera intact.
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const session = { ...makeSession(), cameraFacing: 'user' }
+    const sent = []
+    let migrated = false
+    storage.loadOutbox.mockReturnValue([{ id: 'op1', type: 'upsert_session', entity_id: session.id }])
+    storage.loadSessions.mockReturnValue([session])
+    getClient.mockReturnValue(fakeClient({
+      upsert: (_table, row) => {
+        sent.push(row)
+        return { error: migrated ? null : { code: 'PGRST204', message: "Could not find the 'camera_facing' column" } }
+      },
+    }))
+
+    await processOutbox()
+    expect(storage.removeOp).not.toHaveBeenCalled()
+    expect(getStatus().state).toBe('schema_mismatch')
+
+    migrated = true
+    await processOutbox()
+    expect(storage.removeOp).toHaveBeenCalledWith('op1')
+    expect(sent.at(-1).camera_facing).toBe('user')
+    expect(getStatus().schemaMismatch).toBe(false)
+    err.mockRestore()
   })
 
   it('clears the alarm once a push succeeds', async () => {

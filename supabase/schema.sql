@@ -51,6 +51,10 @@ create table public.sessions (
   -- records whether that held. NULL = never measured, which is NOT the same
   -- claim as 0 (measured, and in plane).
   max_segment_tilt  real,
+  -- Which camera took the bout: 'user' (front), 'environment' (rear) or
+  -- 'unknown' (the device did not report it). NULL = saved before this was
+  -- recorded; no default, so those rows stay distinguishable.
+  camera_facing     text check (camera_facing in ('user', 'environment', 'unknown')),
   -- HISTORICAL — nothing reads or writes this. Head redaction shipped in #15
   -- ('blur1', or 'solid1' where Canvas 2D filters were unsupported) and was
   -- removed in #17 after two on-device failures. Retained, not dropped: it is

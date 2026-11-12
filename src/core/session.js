@@ -33,6 +33,14 @@ function _round1(v) {
   return Math.round(v * 10) / 10
 }
 
+/** The values a session's `cameraFacing` may hold. */
+export const CAMERA_FACINGS = ['user', 'environment', 'unknown']
+
+/** Anything that is not a confirmed front or rear camera is 'unknown'. */
+export function normalizeCameraFacing(facing) {
+  return facing === 'user' || facing === 'environment' ? facing : 'unknown'
+}
+
 export class SessionRecorder {
   constructor() {
     this._angles    = []      // all angle samples captured this session
@@ -46,6 +54,7 @@ export class SessionRecorder {
     this._maxTilt   = null    // null = never measured, distinct from 0
     this._modelId      = null
     this._modelVersion = null
+    this._camera       = 'unknown'
     // Per-extreme evidence, captured with each snapshot. See setExtremeEvidence.
     this._evidence = { max: null, min: null }
   }
@@ -129,6 +138,20 @@ export class SessionRecorder {
   setCalibration(offset, captured) {
     this._calOffset  = offset ?? null
     this._calibrated = captured ?? null
+  }
+
+  /**
+   * Which camera the stream was CONFIRMED to come from. Call before start(),
+   * alongside setContext(). Pass what the running track reported, never what
+   * was requested: a browser may hand back a different camera than asked for.
+   * Anything but 'user' (front) or 'environment' (rear) is stored as
+   * 'unknown', so a session this build saves never has the field empty —
+   * empty is reserved for sessions saved before the camera was recorded.
+   *
+   * @param {string|null} facing
+   */
+  setCamera(facing) {
+    this._camera = normalizeCameraFacing(facing)
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
@@ -244,6 +267,10 @@ export class SessionRecorder {
       // the limb stays in the image plane, so this is the record of whether
       // that held. Rounded to 1dp like everything else here.
       maxSegmentTilt: this._maxTilt === null ? null : Math.round(this._maxTilt * 10) / 10,
+      // Which camera took the bout: 'user' (front), 'environment' (rear) or
+      // 'unknown' (the device did not say). ABSENT means saved before this was
+      // recorded, when the rear camera was the only one the app requested.
+      cameraFacing:  this._camera,
       notes:         '',
       app_version:   '0.1.0',
       // Supabase Storage paths for the two overlay snapshots. Null until the

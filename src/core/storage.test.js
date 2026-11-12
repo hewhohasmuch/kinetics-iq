@@ -167,6 +167,26 @@ describe('patients', () => {
   })
 })
 
+// ─── Which camera Measure opens ──────────────────────────────────────────────
+
+describe('camera_facing setting', () => {
+
+  it('defaults to the rear camera', () => {
+    localStorage.removeItem('rom_settings')
+    expect(loadSettings().camera_facing).toBe('environment')
+  })
+
+  it('defaults to the rear camera for settings saved before it existed', () => {
+    localStorage.setItem('rom_settings', JSON.stringify({ calibration_offset: 3 }))
+    expect(loadSettings().camera_facing).toBe('environment')
+  })
+
+  it('keeps a saved front camera', () => {
+    localStorage.setItem('rom_settings', JSON.stringify({ camera_facing: 'user' }))
+    expect(loadSettings().camera_facing).toBe('user')
+  })
+})
+
 // ─── Active patient + calibration coupling ───────────────────────────────────
 
 describe('setActivePatientId', () => {

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { SessionRecorder } from './session.js'
+import { SessionRecorder, CAMERA_FACINGS, normalizeCameraFacing } from './session.js'
 
 describe('SessionRecorder', () => {
 
@@ -560,5 +560,44 @@ describe('landmark evidence', () => {
     const s = r.stop()
     expect(s.modelId).toBeNull()
     expect(s.modelVersion).toBeNull()
+  })
+})
+
+// ─── Which camera took the bout ──────────────────────────────────────────────
+//
+// The stamp is what the running stream was CONFIRMED to be. A session this
+// build saves always carries one of three values; an empty field is reserved
+// for sessions saved before the camera was recorded.
+
+describe('SessionRecorder — cameraFacing', () => {
+
+  function take(setup) {
+    const r = new SessionRecorder()
+    setup?.(r)
+    r.start()
+    r.record(45)
+    return r.stop()
+  }
+
+  it.each(['user', 'environment', 'unknown'])('stamps a confirmed %s camera', (facing) => {
+    expect(take(r => r.setCamera(facing)).cameraFacing).toBe(facing)
+  })
+
+  it.each([null, undefined, '', 'front', 'left'])(
+    'stores %j as unknown, never as an empty field', (value) => {
+      expect(take(r => r.setCamera(value)).cameraFacing).toBe('unknown')
+    })
+
+  it('is unknown, not empty, when the camera was never supplied', () => {
+    const s = take()
+    expect(s.cameraFacing).toBe('unknown')
+    expect(CAMERA_FACINGS).toContain(s.cameraFacing)
+  })
+
+  it('normalizeCameraFacing passes only a confirmed front or rear camera', () => {
+    expect(normalizeCameraFacing('user')).toBe('user')
+    expect(normalizeCameraFacing('environment')).toBe('environment')
+    expect(normalizeCameraFacing('unknown')).toBe('unknown')
+    expect(normalizeCameraFacing(undefined)).toBe('unknown')
   })
 })

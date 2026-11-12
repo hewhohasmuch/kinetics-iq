@@ -17,6 +17,7 @@ import {
   sideLabel,
   patientInitials,
   positionLabel,
+  cameraLabel,
   motionLabel,
   extremeLabels,
   romArc,
@@ -295,4 +296,36 @@ describe('JOINT_NAMES', () => {
     }
   })
 
+})
+
+// ─── cameraLabel ─────────────────────────────────────────────────────────────
+
+describe('cameraLabel', () => {
+
+  it('names the front and rear cameras', () => {
+    expect(cameraLabel('user')).toBe('Front')
+    expect(cameraLabel('environment')).toBe('Rear')
+  })
+
+  it('says "Not applicable" for a session saved before the camera was recorded', () => {
+    expect(cameraLabel(undefined)).toBe('Not applicable')
+    expect(cameraLabel(null)).toBe('Not applicable')
+  })
+
+  it('says "Not identified" when the device did not report the camera', () => {
+    expect(cameraLabel('unknown')).toBe('Not identified')
+  })
+
+  it('never lets an unrecognised value pass for an older session', () => {
+    for (const value of ['', 'front', 'rear', 0, false]) {
+      expect(cameraLabel(value)).toBe('Not identified')
+    }
+  })
+
+  it('never returns an empty label or the words "not recorded"', () => {
+    for (const value of ['user', 'environment', 'unknown', undefined, null, 'x']) {
+      expect(cameraLabel(value)).not.toBe('')
+      expect(cameraLabel(value)).not.toMatch(/not recorded/i)
+    }
+  })
 })

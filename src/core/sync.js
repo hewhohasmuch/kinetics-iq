@@ -293,6 +293,12 @@ export function sessionToRow(s) {
     // plane; this says whether it did. Dropping it in the round-trip would
     // bring the session back claiming that was never checked.
     max_segment_tilt:   s.maxSegmentTilt ?? null,
+    // Which camera took the bout (0007). OMITTED, not sent as null, when this
+    // device does not have it: a device that pulled the session with an older
+    // build dropped the field locally, and an edit there (a verification, a
+    // note) would otherwise upload "empty" over the value another device
+    // recorded. An upsert leaves a column it is not given alone.
+    ...(s.cameraFacing != null ? { camera_facing: s.cameraFacing } : {}),
     // ── Landmark evidence + verification (0006) ──────────────────────────────
     // Same rule as every stamp above: if these do not travel, a cloud pull
     // brings the session back claiming evidence was never captured, and a
@@ -349,6 +355,9 @@ export function rowToSession(row) {
     // same claim on both sides of the wire here, and 0 would assert the limb
     // was checked and found in plane.
     maxSegmentTilt:    row.max_segment_tilt ?? null,
+    // `undefined` when null: absence marks a session saved before the camera
+    // was recorded, which is not the same as 'unknown' (device did not say).
+    cameraFacing:      row.camera_facing ?? undefined,
     // ── Landmark evidence + verification (0006) ──────────────────────────────
     // `undefined` for the three stamps: their ABSENCE is what marks a session
     // recorded before landmark capture existed, which is not verifiable and

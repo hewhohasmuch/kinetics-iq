@@ -547,6 +547,9 @@ const DEFAULT_SETTINGS = {
   // Toggled from the export confirmation sheet — there is no settings screen,
   // and the sheet is the only moment the choice is meaningful.
   export_include_initials: true,
+  // Which camera Measure opens: 'environment' (rear) or 'user' (front). Saved
+  // only once a stream is confirmed to come from that camera.
+  camera_facing: 'environment',
   // MeasureView's last joint/side/position and the patient it was for; see
   // loadMeasureSelection().
   measure_selection: null,

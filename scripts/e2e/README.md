@@ -84,6 +84,7 @@ each on its own port so it can run beside this one:
 - `scripts/verify-measure-warm-start.mjs`: one model fetch per run, camera
   resume after History/Patients, selection carry-over.
 - `scripts/verify-recording-not-lost.mjs`: no exit from Measure discards a take, except Retake (which it also covers).
+- `scripts/verify-camera-flip.mjs`: the front/rear switch, with the reported camera, a missing front camera and a slow start scripted through a wrapped `getUserMedia`. Uses a still fixture (`ensureFixture({ still: true })`).
 
 `scripts/verify-patients.mjs` needs no camera or fixture: it seeds patients and
 drives the Patients search and the New patient form's Save & measure.

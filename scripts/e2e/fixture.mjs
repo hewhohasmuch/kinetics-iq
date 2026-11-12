@@ -64,13 +64,17 @@ function toYuv420(rgba) {
  * Ensure the y4m exists, building it if needed. Cached on disk — the file is
  * ~23MB and deterministic, so it is generated once and gitignored.
  *
+ * `still: true` builds a second file holding only the unmirrored photo. A
+ * check on which way round a stored picture is needs a frame that never
+ * flips by itself (verify-camera-flip.mjs); the recorded ROM is then ~0.
+ *
  * @returns {Promise<string>} absolute path to the y4m
  */
-export async function ensureFixture({ force = false } = {}) {
+export async function ensureFixture({ force = false, still = false } = {}) {
   if (!existsSync(FIXTURE_DIR)) mkdirSync(FIXTURE_DIR, { recursive: true })
 
   const jpegPath = join(FIXTURE_DIR, 'pose.jpg')
-  const y4mPath  = join(FIXTURE_DIR, 'pose.y4m')
+  const y4mPath  = join(FIXTURE_DIR, still ? 'pose-still.y4m' : 'pose.y4m')
 
   if (existsSync(y4mPath) && !force) return y4mPath
 
@@ -110,7 +114,7 @@ export async function ensureFixture({ force = false } = {}) {
     const parts = [Buffer.from(`YUV4MPEG2 W${W} H${H} F${FPS}:1 Ip A1:1 C420jpeg\n`)]
     const FRAME = Buffer.from('FRAME\n')
     for (let i = 0; i < HALF_FRAMES; i++) parts.push(FRAME, normal)
-    for (let i = 0; i < HALF_FRAMES; i++) parts.push(FRAME, mirrored)
+    for (let i = 0; i < HALF_FRAMES; i++) parts.push(FRAME, still ? normal : mirrored)
 
     writeFileSync(y4mPath, Buffer.concat(parts))
     return y4mPath
